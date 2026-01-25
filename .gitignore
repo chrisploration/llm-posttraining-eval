@@ -205,3 +205,29 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+
+# model weights & checkpoints
+*.bin
+*.safetensors
+checkpoints/
+outputs/
+
+# datasets & caches
+data/
+.cache/
+hf_cache/
+datasets/
+
+# experiment logs
+wandb/
+logs/
+
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+.venv/
