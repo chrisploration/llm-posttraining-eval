@@ -1,0 +1,38 @@
+model:
+  base_id: mistralai/Mistral-7B-Instruct-v0.3
+  load_in_4bit: true
+
+data:
+  train_file: data/posttrain/train.jsonl
+  format: chat
+  max_seq_length: 2048
+
+training:
+  method: sft
+  num_epochs: 1
+  learning_rate: 2.0e-4
+  warmup_ratio: 0.03
+  max_grad_norm: 1.0
+
+batching:
+  micro_batch_size: 1
+  grad_accum_steps: 16
+  gradient_checkpointing: true
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+output:
+  output_dir: checkpoints/post_v1
+
+seed: 42
