@@ -6,8 +6,12 @@ import re
 import os
 import json
 import argparse
+import subprocess
+import sys
+import transformers
+import platform
 
-
+from datetime import datetime, timezone
 from typing import Dict, Sequence, Mapping, List, Any, Optional, Tuple
 
 from transformers import PreTrainedTokenizerBase, PreTrainedModel, AutoTokenizer, AutoModelForCausalLM
@@ -249,6 +253,46 @@ def mean(xs: Sequence[int]) -> Optional[float]:
 
 
 
+
+def _git_sha() -> str | None:
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    except Exception:
+        return None
+
+
+def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, generation: dict) -> dict:
+    return {
+        "run_id": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+        "config_path": config_path,
+        "output_dir": output_dir,
+        "model_id": model_id,
+        "seed": seed,
+        "generation": generation,
+        "git_sha": _git_sha(),
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "torch": torch.__version__,
+        "transformers": transformers.__version__,
+        "cuda": torch.version.cuda if torch.cuda.is_available() else None,
+        "device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0
+    }
+
+
+def _write_run_artifacts(output_dir: str, cfg_snapshot: dict, meta: dict) -> None:
+    os.makedirs(output_dir, exist_ok=True)
+
+    with open(os.path.join(output_dir, "config_snapshot.yaml"), "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg_snapshot, f, sort_keys=False)
+
+    with open(os.path.join(output_dir, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2, sort_keys=True)
+
+
+
+
+
+
 # Execute the full evaluation pipeline defined by the config, including data generation, model inference, scoring, and aggregation, and write results to a single JSON file.
 def run(config_path: str, output_dir: str) -> str:
     cfg = load_config(config_path)
@@ -256,6 +300,30 @@ def run(config_path: str, output_dir: str) -> str:
     rng = random.Random(cfg.seed)
 
     os.makedirs(output_dir, exist_ok=True)
+
+    out_path = os.path.join(output_dir, "results.json")
+    if os.path.exists(out_path):
+        raise FileExistsError(
+            f"{out_path} already exists. Choose a new --output_dir or delete the old run."
+        )
+    
+    cfg_snapshot = cfg.to_dict() if hasattr(cfg, "to_dict") else {
+        "model_id": cfg.model_id,
+        "seed": cfg.seed,
+        "eval": cfg.eval,
+        "generation": cfg.generation
+    }
+
+
+    meta = _build_meta(
+        config_path=config_path,
+        output_dir=output_dir,
+        model_id=cfg.model_id,
+        seed=cfg.seed,
+        generation=cfg.generation
+    )
+    _write_run_artifacts(output_dir, cfg_snapshot, meta)
+
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_id, use_fast=True)
     model = AutoModelForCausalLM.from_pretrained(
@@ -380,7 +448,6 @@ def run(config_path: str, output_dir: str) -> str:
         else:
             raise ValueError(f"Unsupported task: {task}")
         
-    out_path = os.path.join(output_dir, "results.json")
     with open(out_path, "w", encoding="utf-8") as f: json.dump(results, f, indent=2, ensure_ascii=False)
 
     return out_path
