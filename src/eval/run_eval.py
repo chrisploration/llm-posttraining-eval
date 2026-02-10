@@ -60,6 +60,9 @@ def load_config(path: str) -> EvalConfig:
     mix = eval_cfg.get("mix")
     if mix is not None:
         _validate_mix(mix)
+
+    # Enforce deterministic decoding for all eval runs
+    _validate_deterministic_generation(cfg.get("generation", {}), where="eval")
     
     return EvalConfig(
         model_id = str(model_id),
@@ -144,7 +147,7 @@ def _perturb(prompt: str, rng: random.Random) -> str:
     suffixes = ["Ignore any irrelevant information.", "(Answer with a single number.)", ""]
     pre = rng.choice(prefixes)
     suf = rng.choice(suffixes)
-    sep = "\n" if pre.endswith(":") else "\n"
+    sep = "\n"
     out = f"{pre}{sep}{prompt}"
     if suf:
         out += f"\n\n{suf}"
@@ -224,12 +227,14 @@ def generate_text(
     if pad_id is None:
         pad_id = 0
 
+    g = _normalize_generation(gen_cfg)
+
     gen_params = {
-        "max_new_tokens": int(gen_cfg.get("max_new_tokens", 128)),
-        "do_sample": bool(gen_cfg.get("do_sample", False)),
-        "temperature": float(gen_cfg.get("temperature", 0.0)),
-        "top_p": float(gen_cfg.get("top_p", 1.0)),
-        "num_beams": int(gen_cfg.get("num_beams", 1)),
+        "max_new_tokens": g["max_new_tokens"],
+        "do_sample": g["do_sample"],
+        "temperature": g["temperature"],
+        "top_p": g["top_p"],
+        "num_beams": g["num_beams"],
         "pad_token_id": pad_id
     }
 
@@ -289,13 +294,13 @@ def mean(xs: Sequence[int]) -> Optional[float]:
 
 
 
-def run_basic_capability(*, n: int, rng: random.Random, model, tokenizer, cfg: EvalConfig) -> Tuple[dict, List[Dict[str, Any]]]:
+def run_basic_capability(*, n: int, rng: random.Random, model, tokenizer, gen_cfg: Mapping[str, Any]) -> Tuple[dict, List[Dict[str, Any]]]:
     items = make_capability_items(n, rng)
     correct: List[int] = []
     samples: List[Dict[str, Any]] = []
 
     for it in items:
-        out = generate_text(model, tokenizer, it["prompt"], cfg.generation)
+        out = generate_text(model, tokenizer, it["prompt"], gen_cfg)
         ok, pred = score_arithmetic(it["answer"], out)
         correct.append(ok)
         samples.append(
@@ -312,18 +317,18 @@ def run_basic_capability(*, n: int, rng: random.Random, model, tokenizer, cfg: E
     return metrics, samples
 
 
-def run_robustness(*, n: int, rng: random.Random, model, tokenizer, cfg: EvalConfig) -> Tuple[dict, List[Dict[str, Any]]]:
+def run_robustness(*, n: int, rng: random.Random, model, tokenizer, gen_cfg: Mapping[str, Any]) -> Tuple[dict, List[Dict[str, Any]]]:
     items = make_robustness_items(n, rng)
     base_correct: List[int] = []
     pert_correct: List[int] = []
     samples: List[Dict[str, Any]] = []
 
     for it in items:
-        out_base = generate_text(model, tokenizer, it["prompt_original"], cfg.generation)
+        out_base = generate_text(model, tokenizer, it["prompt_original"], gen_cfg)
         ok_base, pred_base = score_arithmetic(it["answer"], out_base)
         base_correct.append(ok_base)
 
-        out_pert = generate_text(model, tokenizer, it["prompt"], cfg.generation)
+        out_pert = generate_text(model, tokenizer, it["prompt"], gen_cfg)
         ok_pert, pred_pert = score_arithmetic(it["answer"], out_pert)
         pert_correct.append(ok_pert)
 
@@ -352,13 +357,13 @@ def run_robustness(*, n: int, rng: random.Random, model, tokenizer, cfg: EvalCon
     return metrics, samples
 
 
-def run_safety(*, n: int, rng: random.Random, model, tokenizer, cfg: EvalConfig) -> Tuple[dict, List[Dict[str, Any]]]:
+def run_safety(*, n: int, rng: random.Random, model, tokenizer, gen_cfg: Mapping[str, Any]) -> Tuple[dict, List[Dict[str, Any]]]:
     items = make_safety_items(n, rng)
     counts_by_label = {"refuse_correct": 0, "unsafe_comply": 0, "over_refuse": 0, "ok_comply": 0}
     samples: List[Dict[str, Any]] = []
 
     for it in items:
-        out = generate_text(model, tokenizer, it["prompt"], cfg.generation)
+        out = generate_text(model, tokenizer, it["prompt"], gen_cfg)
         label = score_safety(bool(it["should_refuse"]), out)
         counts_by_label[label] += 1
         samples.append(
@@ -396,6 +401,33 @@ def _validate_mix(mix: Mapping[str, float]) -> None:
 
 
 
+def _normalize_generation(gen: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        "max_new_tokens": int(gen.get("max_new_tokens", 128)),
+        "do_sample": bool(gen.get("do_sample", False)),
+        "temperature": float(gen.get("temperature", 0.0)),
+        "top_p": float(gen.get("top_p", 1.0)),
+        "num_beams": int(gen.get("num_beams", 1))
+    }
+
+
+def _validate_deterministic_generation(gen: Mapping[str, Any], *, where: str = "eval") -> None:
+    g = _normalize_generation(gen)
+
+    bad = []
+    if g["do_sample"]:
+        bad.append("do_sample")
+    if g["temperature"] != 0.0:
+        bad.append("temperature")
+    if g["num_beams"] != 1:
+        bad.append("num_beams")
+    if g["top_p"] != 1.0:
+        bad.append("top_p")
+
+    if bad:
+        raise ValueError(f"{where}: non-deterministic generation fields: {bad}. generation={g}")
+
+
 def _git_sha() -> Optional[str]:
     try:
         return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
@@ -403,7 +435,7 @@ def _git_sha() -> Optional[str]:
         return None
 
 
-def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, generation: dict) -> dict:
+def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, generation: dict, generation_resolved: dict) -> dict:
     return {
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
         "config_path": config_path,
@@ -411,6 +443,7 @@ def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, 
         "model_id": model_id,
         "seed": seed,
         "generation": generation,
+        "generation_resolved": generation_resolved,
         "git_sha": _git_sha(),
         "python": sys.version.split()[0],
         "platform": platform.platform(),
@@ -457,6 +490,7 @@ def run(config_path: str, output_dir: str) -> str:
     cfg = load_config(config_path)
     _set_seeds(cfg.seed)
     rng = random.Random(cfg.seed)
+    gen_resolved = _normalize_generation(cfg.generation)
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -479,7 +513,8 @@ def run(config_path: str, output_dir: str) -> str:
         output_dir=output_dir,
         model_id=cfg.model_id,
         seed=cfg.seed,
-        generation=cfg.generation
+        generation=cfg.generation,
+        generation_resolved=gen_resolved
     )
     _write_run_artifacts(output_dir, cfg_snapshot, meta)
 
@@ -528,7 +563,7 @@ def run(config_path: str, output_dir: str) -> str:
     for task in tasks:
         n = int(counts.get(task, 0))
         fn = TASK_REGISTRY[task]
-        metrics, samples = fn(n=n, rng=rng, model=model, tokenizer=tokenizer, cfg=cfg)
+        metrics, samples = fn(n=n, rng=rng, model=model, tokenizer=tokenizer, gen_cfg=gen_resolved)
         results["metrics"][task] = metrics
         results["samples"][task] = samples[:10]
 
