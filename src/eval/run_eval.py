@@ -396,7 +396,7 @@ def _validate_mix(mix: Mapping[str, float]) -> None:
 
 
 
-def _git_sha() -> str | None:
+def _git_sha() -> Optional[str]:
     try:
         return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     except Exception:
