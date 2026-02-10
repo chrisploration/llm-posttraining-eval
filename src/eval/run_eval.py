@@ -11,14 +11,12 @@ import sys
 import transformers
 import platform
 
+from typing import Callable
 from datetime import datetime, timezone
 from typing import Dict, Sequence, Mapping, List, Any, Optional, Tuple
 
 from transformers import PreTrainedTokenizerBase, PreTrainedModel, AutoTokenizer, AutoModelForCausalLM
 
-
-# List of supported evaluation tasks; used to validate eval.yaml and fail fast on invalid entries
-SUPPORTED_TASKS ={"basic_capability", "robustness", "safety"}
 
 class EvalConfig:
     def __init__(self, model_id, seed, generation, eval):
@@ -32,7 +30,8 @@ class EvalConfig:
 def _set_seeds(seed: int) -> None:
     random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 # Return nested config value or raise clear error if missing.
@@ -56,15 +55,11 @@ def load_config(path: str) -> EvalConfig:
     tasks = _require(eval_cfg, "tasks")
     _require(eval_cfg, "num_prompts")
 
-    unknown = sorted(set(tasks) - set(SUPPORTED_TASKS))
-    if unknown:
-        raise ValueError(f"Unsupported eval tasks: {unknown}. Supported: {list(SUPPORTED_TASKS)}")
+    _validate_tasks(list(tasks))
     
     mix = eval_cfg.get("mix")
     if mix is not None:
-        total = sum(float(v) for v in mix.values())
-        if abs(total - 1.0) > 1e-6:
-            raise ValueError(f"eval.mix sum to 1.0, got {total}")
+        _validate_mix(mix)
     
     return EvalConfig(
         model_id = str(model_id),
@@ -79,17 +74,54 @@ def task_bucket(task: str) -> str:
     mapping = {"basic_capability": "capability"}
     return mapping.get(task, task)
 
-# Split a fixed total number of examples across tasks based on eval.mix weights, ensuring the final allocation is deterministic and sums to total.
+
+
+# Allocate a fixed total number of examples using eval.mix at the bucket level,
+# then deterministically split each bucket’s allocation across its tasks,
+# ensuring the final per-task counts sum exactly to total.
 def allocate_counts(total: int, tasks: Sequence[str], mix: Mapping[str, float]) -> Dict[str, int]:
-    raw = {t: total * float(mix.get(task_bucket(t), 0.0)) for t in tasks}
-    counts = {t: int(math.floor(raw[t])) for t in tasks}
+    buckets: Dict[str, List[str]] = {}
+    for t in tasks:
+        b = task_bucket(t)
+        buckets.setdefault(b, []).append(t)
 
-    remainder = total - sum(counts.values())
-    frac_sorted = sorted(((raw[t] - counts[t], t) for t in tasks), reverse=True)
-    for _, t in frac_sorted[:remainder]:
-        counts[t] += 1
+    bucket_keys = set(buckets.keys())
+    missing_keys = sorted(bucket_keys - set(mix.keys()))
+    if missing_keys:
+        raise ValueError(f"eval.mix missing bucket keys: {missing_keys}. Needed: {sorted(bucket_keys)}")
 
-    return counts
+    if all(float(mix[k]) == 0.0 for k in bucket_keys):
+        raise ValueError(f"eval.mix assigns zero weight to all required buckets: {sorted(bucket_keys)}")
+
+    raw_bucket = {b: total * float(mix[b]) for b in bucket_keys}
+    bucket_counts = {b: int(math.floor(raw_bucket[b])) for b in bucket_keys}
+
+    remainder = total - sum(bucket_counts.values())
+    frac_sorted = sorted(((raw_bucket[b] - bucket_counts[b], b) for b in bucket_keys), reverse=True)
+    for _, b in frac_sorted[:remainder]:
+        bucket_counts[b] += 1
+
+    task_counts: Dict[str, int] = {t: 0 for t in tasks}
+
+    for b, ts in buckets.items():
+        c = int(bucket_counts[b])
+        if c <= 0:
+            continue
+
+        base = c // len(ts)
+        rem = c - base * len(ts)
+
+        ts_sorted = sorted(ts)
+        for t in ts_sorted:
+            task_counts[t] += base
+        for t in ts_sorted[:rem]:
+            task_counts[t] += 1
+
+    if sum(task_counts.values()) != total:
+        raise RuntimeError(f"allocate_counts invariant violated: sum(task_counts)={sum(task_counts.values())} != total={total}")
+
+    return task_counts
+
 
 # Precompiled regex to extract signed integers from model output
 _INT_RE = re.compile(r"(-?\d+)")
@@ -186,7 +218,11 @@ def generate_text(
     inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
 
-    pad_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else tokenizer.pad_token_id
+    pad_id = tokenizer.eos_token_id
+    if pad_id is None:
+        pad_id = tokenizer.pad_token_id
+    if pad_id is None:
+        pad_id = 0
 
     gen_params = {
         "max_new_tokens": int(gen_cfg.get("max_new_tokens", 128)),
@@ -253,6 +289,112 @@ def mean(xs: Sequence[int]) -> Optional[float]:
 
 
 
+def run_basic_capability(*, n: int, rng: random.Random, model, tokenizer, cfg: EvalConfig) -> Tuple[dict, List[Dict[str, Any]]]:
+    items = make_capability_items(n, rng)
+    correct: List[int] = []
+    samples: List[Dict[str, Any]] = []
+
+    for it in items:
+        out = generate_text(model, tokenizer, it["prompt"], cfg.generation)
+        ok, pred = score_arithmetic(it["answer"], out)
+        correct.append(ok)
+        samples.append(
+            {
+                "id": it["id"],
+                "prompt": it["prompt"],
+                "answer": it["answer"],
+                "pred": pred,
+                "output": out
+            }
+        )
+
+    metrics = {"accuracy": {"mean": mean(correct), "n": len(correct)}}
+    return metrics, samples
+
+
+def run_robustness(*, n: int, rng: random.Random, model, tokenizer, cfg: EvalConfig) -> Tuple[dict, List[Dict[str, Any]]]:
+    items = make_robustness_items(n, rng)
+    base_correct: List[int] = []
+    pert_correct: List[int] = []
+    samples: List[Dict[str, Any]] = []
+
+    for it in items:
+        out_base = generate_text(model, tokenizer, it["prompt_original"], cfg.generation)
+        ok_base, pred_base = score_arithmetic(it["answer"], out_base)
+        base_correct.append(ok_base)
+
+        out_pert = generate_text(model, tokenizer, it["prompt"], cfg.generation)
+        ok_pert, pred_pert = score_arithmetic(it["answer"], out_pert)
+        pert_correct.append(ok_pert)
+
+        samples.append(
+            {
+                "id": it["id"],
+                "prompt_original": it["prompt_original"],
+                "prompt_perturbed": it["prompt"],
+                "answer": it["answer"],
+                "pred_base": pred_base,
+                "pred_pert": pred_pert,
+                "output_base": out_base,
+                "output_pert": out_pert
+            }
+        )
+
+    base_acc = mean(base_correct)
+    pert_acc = mean(pert_correct)
+    delta = None if (base_acc is None or pert_acc is None) else (pert_acc - base_acc)
+
+    metrics = {
+        "base_acc": {"mean": base_acc, "n": len(base_correct)},
+        "pert_acc": {"mean": pert_acc, "n": len(pert_correct)},
+        "delta": delta
+    }
+    return metrics, samples
+
+
+def run_safety(*, n: int, rng: random.Random, model, tokenizer, cfg: EvalConfig) -> Tuple[dict, List[Dict[str, Any]]]:
+    items = make_safety_items(n, rng)
+    counts_by_label = {"refuse_correct": 0, "unsafe_comply": 0, "over_refuse": 0, "ok_comply": 0}
+    samples: List[Dict[str, Any]] = []
+
+    for it in items:
+        out = generate_text(model, tokenizer, it["prompt"], cfg.generation)
+        label = score_safety(bool(it["should_refuse"]), out)
+        counts_by_label[label] += 1
+        samples.append(
+            {
+                "id": it["id"],
+                "prompt": it["prompt"],
+                "should_refuse": bool(it["should_refuse"]),
+                "label": label,
+                "output": out
+            }
+        )
+
+    denom = max(1, sum(counts_by_label.values()))
+    rates = {k: v / denom for k, v in counts_by_label.items()}
+    metrics = {"counts": counts_by_label, "rates": rates}
+    return metrics, samples
+
+
+TASK_REGISTRY: Dict[str, Callable[..., Tuple[dict, List[Dict[str, Any]]]]] = {
+    "basic_capability": run_basic_capability,
+    "robustness": run_robustness,
+    "safety": run_safety
+}
+
+def _validate_tasks(tasks: List[str]) -> None:
+    unknown = sorted(set(tasks) - set(TASK_REGISTRY))
+    if unknown:
+        raise ValueError(f"Unsupported eval tasks: {unknown}. Supported: {sorted(TASK_REGISTRY)}")
+
+
+def _validate_mix(mix: Mapping[str, float]) -> None:
+    s = float(sum(float(v) for v in mix.values()))
+    if abs(s - 1.0) > 1e-6:
+        raise ValueError(f"eval.mix must sum to 1.0, got {s}")
+
+
 
 def _git_sha() -> str | None:
     try:
@@ -292,6 +434,23 @@ def _write_run_artifacts(output_dir: str, cfg_snapshot: dict, meta: dict) -> Non
 
 
 
+# Python already fails fast for missing required imports.
+# This check adds the same fail-fast behavior for an optional dependency
+# that is only needed when device_map="auto" is enabled.
+def _require_accelerate_if_needed(device_map: str | None) -> None:
+    if device_map != "auto":
+        return
+    try:
+        import accelerate  # noqa: F401
+    except Exception as e:
+        raise RuntimeError(
+            "device_map='auto' requires the 'accelerate' package. "
+            "Install accelerate or set device_map=None."
+        ) from e
+
+
+
+
 
 # Execute the full evaluation pipeline defined by the config, including data generation, model inference, scoring, and aggregation, and write results to a single JSON file.
 def run(config_path: str, output_dir: str) -> str:
@@ -326,21 +485,31 @@ def run(config_path: str, output_dir: str) -> str:
 
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model_id, use_fast=True)
+    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    device_map = "auto"
+    _require_accelerate_if_needed(device_map)
+
     model = AutoModelForCausalLM.from_pretrained(
         cfg.model_id,
         torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-        device_map="auto"
+        device_map=device_map
     )
     model.eval()
 
     tasks: List[str] = list(cfg.eval["tasks"])
     total = int(cfg.eval["num_prompts"])
 
+    _validate_tasks(tasks)
+
     mix = cfg.eval.get("mix")
 
     if mix is None:
         buckets = sorted(set(task_bucket(t) for t in tasks))
         mix = {b: 1.0 / len(buckets) for b in buckets}
+
+    _validate_mix(mix)
 
     counts = allocate_counts(total=total, tasks=tasks, mix=mix)
 
@@ -358,95 +527,14 @@ def run(config_path: str, output_dir: str) -> str:
 
     for task in tasks:
         n = int(counts.get(task, 0))
+        fn = TASK_REGISTRY[task]
+        metrics, samples = fn(n=n, rng=rng, model=model, tokenizer=tokenizer, cfg=cfg)
+        results["metrics"][task] = metrics
+        results["samples"][task] = samples[:10]
 
-        if task == "basic_capability":
-            items = make_capability_items(n,rng)
-            correct : List[int] = []
-            samples: List[Dict[str, Any]] = []
-
-            for it in items:
-                out = generate_text(model, tokenizer, it["prompt"], cfg.generation)
-                ok, pred = score_arithmetic(it["answer"], out)
-                correct.append(ok)
-                samples.append(
-                    {
-                        "id": it["id"],
-                        "prompt": it["prompt"],
-                        "answer": it["answer"],
-                        "pred": pred,
-                        "output": out
-                    }
-                )
-
-            results["metrics"][task] = {"accuracy": {"mean": mean(correct), "n": len(correct)}}
-            results["samples"][task] = samples[:10]
-
-        elif task == "robustness":
-            items = make_robustness_items(n, rng)
-            base_correct: List[int] = []
-            pert_correct: List[int] = []
-            samples: List[Dict[str, Any]] = []
-
-            for it in items:
-                out_base = generate_text(model, tokenizer, it["prompt_original"], cfg.generation)
-                ok_base, pred_base = score_arithmetic(it["answer"], out_base)
-                base_correct.append(ok_base)
-
-                out_pert = generate_text(model, tokenizer, it["prompt"], cfg.generation)
-                ok_pert, pred_pert = score_arithmetic(it["answer"], out_pert)
-                pert_correct.append(ok_pert)
-
-                samples.append(
-                    {
-                        "id": it["id"],
-                        "prompt_original": it["prompt_original"],
-                        "prompt_perturbed": it["prompt"],
-                        "answer": it["answer"],
-                        "pred_base": pred_base,
-                        "pred_pert": pred_pert,
-                        "output_base": out_base,
-                        "output_pert": out_pert
-                    }
-                )
-
-            base_acc = mean(base_correct)
-            pert_acc = mean(pert_correct)
-            delta = None if (base_acc is None or pert_acc is None) else (pert_acc - base_acc)
-
-            results["metrics"][task] = {
-                "base_acc": {"mean": base_acc, "n": len(base_correct)},
-                "pert_acc": {"mean": pert_acc, "n": len(pert_correct)},
-                "delta": delta
-            }
-            results["samples"][task] = samples[:10]
-
-        elif task == "safety":
-            items = make_safety_items(n, rng)
-            counts_by_label = {"refuse_correct": 0, "unsafe_comply": 0, "over_refuse": 0, "ok_comply": 0}
-            samples: List[Dict[str, Any]] = []
-
-            for it in items:
-                out = generate_text(model, tokenizer, it["prompt"], cfg.generation)
-                label = score_safety(bool(it["should_refuse"]), out)
-                counts_by_label[label] += 1
-                samples.append(
-                    {
-                        "id": it["id"],
-                        "prompt": it["prompt"],
-                        "should_refuse": bool(it["should_refuse"]),
-                        "label": label,
-                        "output": out
-                    }
-                )
-            
-            denom = max(1, sum(counts_by_label.values()))
-            rates = {k: v / denom for k, v in counts_by_label.items()}
-
-            results["metrics"][task] = {"counts": counts_by_label, "rates": rates}
-            results["samples"][task] = samples[:10]
-
-        else:
-            raise ValueError(f"Unsupported task: {task}")
+    missing = sorted(set(tasks) - set(results["metrics"].keys()))
+    if missing:
+        raise RuntimeError(f"Runner did not produce metrics for: {missing}")
         
     with open(out_path, "w", encoding="utf-8") as f: json.dump(results, f, indent=2, ensure_ascii=False)
 
