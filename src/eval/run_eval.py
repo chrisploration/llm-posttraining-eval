@@ -10,6 +10,7 @@ import subprocess
 import sys
 import transformers
 import platform
+import socket
 
 from typing import Callable
 from datetime import datetime, timezone
@@ -435,22 +436,37 @@ def _git_sha() -> Optional[str]:
         return None
 
 
-def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, generation: dict, generation_resolved: dict) -> dict:
+def _gpu_info() -> dict:
+    if not torch.cuda.is_available():
+        return {"available": False}
+    idx = torch.cuda.current_device()
+    return {
+        "available": True,
+        "name": torch.cuda.get_device_name(idx)
+    }
+
+
+def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, generation: dict, generation_resolved: dict, mode: str, model_checkpoint: str, eval_scope: dict) -> dict:
     return {
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
+        "mode": mode,
         "config_path": config_path,
         "output_dir": output_dir,
         "model_id": model_id,
+        "model_checkpoint": model_checkpoint,
         "seed": seed,
+        "eval_scope": eval_scope,
         "generation": generation,
         "generation_resolved": generation_resolved,
         "git_sha": _git_sha(),
+        "hostname": socket.gethostname(),
         "python": sys.version.split()[0],
         "platform": platform.platform(),
         "torch": torch.__version__,
         "transformers": transformers.__version__,
         "cuda": torch.version.cuda if torch.cuda.is_available() else None,
-        "device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0
+        "device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
+        "gpu": _gpu_info()
     }
 
 
@@ -486,8 +502,9 @@ def _require_accelerate_if_needed(device_map: Optional[str]) -> None:
 
 
 # Execute the full evaluation pipeline defined by the config, including data generation, model inference, scoring, and aggregation, and write results to a single JSON file.
-def run(config_path: str, output_dir: str) -> str:
+def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optional[str]) -> str:
     cfg = load_config(config_path)
+    checkpoint = model_checkpoint or cfg.model_id
     _set_seeds(cfg.seed)
     rng = random.Random(cfg.seed)
     gen_resolved = _normalize_generation(cfg.generation)
@@ -508,18 +525,7 @@ def run(config_path: str, output_dir: str) -> str:
     }
 
 
-    meta = _build_meta(
-        config_path=config_path,
-        output_dir=output_dir,
-        model_id=cfg.model_id,
-        seed=cfg.seed,
-        generation=cfg.generation,
-        generation_resolved=gen_resolved
-    )
-    _write_run_artifacts(output_dir, cfg_snapshot, meta)
-
-
-    tokenizer = AutoTokenizer.from_pretrained(cfg.model_id, use_fast=True)
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint, use_fast=True)
     if tokenizer.pad_token is None and tokenizer.eos_token is not None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -527,7 +533,7 @@ def run(config_path: str, output_dir: str) -> str:
     _require_accelerate_if_needed(device_map)
 
     model = AutoModelForCausalLM.from_pretrained(
-        cfg.model_id,
+        checkpoint,
         torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
         device_map=device_map
     )
@@ -547,6 +553,26 @@ def run(config_path: str, output_dir: str) -> str:
     _validate_mix(mix)
 
     counts = allocate_counts(total=total, tasks=tasks, mix=mix)
+
+    eval_scope = {
+        "tasks": tasks,
+        "num_prompts": total,
+        "mix": mix,
+        "counts": counts
+    }
+
+    meta = _build_meta(
+        config_path=config_path,
+        output_dir=output_dir,
+        model_id=cfg.model_id,
+        model_checkpoint=checkpoint,
+        seed=cfg.seed,
+        generation=cfg.generation,
+        generation_resolved=gen_resolved,
+        mode=mode,
+        eval_scope=eval_scope
+    )
+    _write_run_artifacts(output_dir, cfg_snapshot, meta)
 
     results: Dict[str, Any] = {
         "results_version": 1,
@@ -585,13 +611,24 @@ def main() -> None:
         help="Path to the evaluation configuration file (YAML).",
     )
     ap.add_argument(
+        "--mode",
+        default="baseline",
+        choices=["baseline", "posttrained"],
+        help="Label for the run type (stored in meta.json)."
+        )
+    ap.add_argument(
+        "--checkpoint",
+        default=None,
+        help="Optional model checkpoint/path to evaluate (overrides model.id for loading; stored in meta.json)."
+    )
+    ap.add_argument(
         "--output_dir",
         default="results/baseline",
         help="Directory where results.json will be written.",
     )
     args = ap.parse_args()
 
-    out_path = run(args.config, args.output_dir)
+    out_path = run(args.config, args.output_dir, mode=args.mode, model_checkpoint=args.checkpoint)
     print(f"Wrote {out_path}")
 
 
