@@ -254,36 +254,17 @@ def generate_text(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
     prompt: str,
-    gen_cfg: Mapping[str, Any]
+    gen_params: Mapping[str, Any]
 ) -> str:
     prompt_text = _format_prompt(tokenizer, prompt)
 
     inputs = tokenizer(prompt_text, return_tensors="pt")
     inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
-
-    pad_id = tokenizer.eos_token_id
-    if pad_id is None:
-        pad_id = tokenizer.pad_token_id
-    if pad_id is None:
-        pad_id = 0
-
-    g = _normalize_generation(gen_cfg)
-
-    gen_params = {
-        "max_new_tokens": g["max_new_tokens"],
-        "do_sample": g["do_sample"],
-        "temperature": g["temperature"],
-        "top_p": g["top_p"],
-        "num_beams": g["num_beams"],
-        "pad_token_id": pad_id
-    }
-
     with torch.no_grad():
         output_ids = model.generate(**inputs, **gen_params)
-    
-    gen_ids = output_ids[0, inputs["input_ids"].shape[1]:]
 
+    gen_ids = output_ids[0, inputs["input_ids"].shape[1]:]
     return tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
 
@@ -335,13 +316,13 @@ def mean(xs: Sequence[int]) -> Optional[float]:
 
 
 
-def run_basic_capability(*, n: int, rng: random.Random, model, tokenizer, gen_cfg: Mapping[str, Any]) -> Tuple[dict, List[Dict[str, Any]]]:
+def run_basic_capability(*, n: int, rng: random.Random, model, tokenizer, gen_params: Mapping[str, Any]) -> Tuple[dict, List[Dict[str, Any]]]:
     items = make_capability_items(n, rng)
     correct: List[int] = []
     samples: List[Dict[str, Any]] = []
 
     for it in items:
-        out = generate_text(model, tokenizer, it["prompt"], gen_cfg)
+        out = generate_text(model, tokenizer, it["prompt"], gen_params)
         ok, pred = score_arithmetic(it["answer"], out)
         correct.append(ok)
         samples.append(
@@ -358,18 +339,18 @@ def run_basic_capability(*, n: int, rng: random.Random, model, tokenizer, gen_cf
     return metrics, samples
 
 
-def run_robustness(*, n: int, rng: random.Random, model, tokenizer, gen_cfg: Mapping[str, Any]) -> Tuple[dict, List[Dict[str, Any]]]:
+def run_robustness(*, n: int, rng: random.Random, model, tokenizer, gen_params: Mapping[str, Any]) -> Tuple[dict, List[Dict[str, Any]]]:
     items = make_robustness_items(n, rng)
     base_correct: List[int] = []
     pert_correct: List[int] = []
     samples: List[Dict[str, Any]] = []
 
     for it in items:
-        out_base = generate_text(model, tokenizer, it["prompt_original"], gen_cfg)
+        out_base = generate_text(model, tokenizer, it["prompt_original"], gen_params)
         ok_base, pred_base = score_arithmetic(it["answer"], out_base)
         base_correct.append(ok_base)
 
-        out_pert = generate_text(model, tokenizer, it["prompt"], gen_cfg)
+        out_pert = generate_text(model, tokenizer, it["prompt"], gen_params)
         ok_pert, pred_pert = score_arithmetic(it["answer"], out_pert)
         pert_correct.append(ok_pert)
 
@@ -398,13 +379,13 @@ def run_robustness(*, n: int, rng: random.Random, model, tokenizer, gen_cfg: Map
     return metrics, samples
 
 
-def run_safety(*, n: int, rng: random.Random, model, tokenizer, gen_cfg: Mapping[str, Any]) -> Tuple[dict, List[Dict[str, Any]]]:
+def run_safety(*, n: int, rng: random.Random, model, tokenizer, gen_params: Mapping[str, Any]) -> Tuple[dict, List[Dict[str, Any]]]:
     items = make_safety_items(n, rng)
     counts_by_label = {"refuse_correct": 0, "unsafe_comply": 0, "over_refuse": 0, "ok_comply": 0}
     samples: List[Dict[str, Any]] = []
 
     for it in items:
-        out = generate_text(model, tokenizer, it["prompt"], gen_cfg)
+        out = generate_text(model, tokenizer, it["prompt"], gen_params)
         label = score_safety(bool(it["should_refuse"]), out)
         counts_by_label[label] += 1
         samples.append(
@@ -452,6 +433,27 @@ def _normalize_generation(gen: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+#Return the exact generation parameters used for model.generate(), including pad_token_id after tokenizer/pad setup.
+def _resolve_generation_params(gen: Mapping[str, Any], *, tokenizer: PreTrainedTokenizerBase) -> Dict[str, Any]:
+
+    g = _normalize_generation(gen)
+
+    pad_id = tokenizer.eos_token_id
+    if pad_id is None:
+        pad_id = tokenizer.pad_token_id
+    if pad_id is None:
+        pad_id = 0
+
+    return {
+        "max_new_tokens": g["max_new_tokens"],
+        "do_sample": g["do_sample"],
+        "temperature": g["temperature"],
+        "top_p": g["top_p"],
+        "num_beams": g["num_beams"],
+        "pad_token_id": int(pad_id)
+    }
+
+
 def _validate_deterministic_generation(gen: Mapping[str, Any], *, where: str = "eval") -> None:
     g = _normalize_generation(gen)
 
@@ -486,7 +488,7 @@ def _gpu_info() -> Dict[str, Any]:
     }
 
 
-def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, generation: dict, generation_resolved: dict, mode: str, model_checkpoint: str, eval_scope: dict, run_policy: dict) -> Dict[str, Any]:
+def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, generation: Mapping[str, Any], generation_resolved: Mapping[str, Any], mode: str, model_checkpoint: str, eval_scope: Mapping[str, Any], run_policy: Mapping[str, Any]) -> Dict[str, Any]:
     return {
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
         "mode": mode,
@@ -551,7 +553,6 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
     checkpoint = model_checkpoint or cfg.model_id
     _set_seeds(cfg.seed)
     rng = random.Random(cfg.seed)
-    gen_resolved = _normalize_generation(cfg.generation)
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -565,6 +566,8 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
     tokenizer = AutoTokenizer.from_pretrained(checkpoint, use_fast=True)
     if tokenizer.pad_token is None and tokenizer.eos_token is not None:
         tokenizer.pad_token = tokenizer.eos_token
+
+    gen_params = _resolve_generation_params(cfg.generation, tokenizer=tokenizer)
 
     device_map = "auto"
     _require_accelerate_if_needed(device_map)
@@ -611,7 +614,7 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
         model_checkpoint=checkpoint,
         seed=cfg.seed,
         generation=cfg.generation,
-        generation_resolved=gen_resolved,
+        generation_resolved=gen_params,
         mode=mode,
         eval_scope=eval_scope,
         run_policy=run_policy
@@ -633,7 +636,7 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
     for task in tasks:
         n = int(counts.get(task, 0))
         fn = TASK_REGISTRY[task]
-        metrics, samples = fn(n=n, rng=rng, model=model, tokenizer=tokenizer, gen_cfg=gen_resolved)
+        metrics, samples = fn(n=n, rng=rng, model=model, tokenizer=tokenizer, gen_params=gen_params)
         results["metrics"][task] = metrics
         results["samples"][task] = samples[:10]
 
