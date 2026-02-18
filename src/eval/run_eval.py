@@ -12,19 +12,18 @@ import transformers
 import platform
 import socket
 
-from typing import Callable
 from datetime import datetime, timezone
-from typing import Dict, Sequence, Mapping, List, Any, Optional, Tuple
+from typing import Callable, Dict, Sequence, Mapping, List, Any, Optional, Tuple
 
 from transformers import PreTrainedTokenizerBase, PreTrainedModel, AutoTokenizer, AutoModelForCausalLM
 
 
 class EvalConfig:
-    def __init__(self, model_id, seed, generation, eval):
+    def __init__(self, model_id, seed, generation, eval_cfg):
         self.model_id = model_id
         self.seed = seed
         self.generation = generation
-        self.eval = eval
+        self.eval_cfg = eval_cfg
 
 
 # Set random seeds to ensure reproducible behavior
@@ -36,23 +35,63 @@ def _set_seeds(seed: int) -> None:
 
 
 # Return nested config value or raise clear error if missing.
-def _require(cfg: dict, *keys: str):
-    cur = cfg
+def _require(cfg: Mapping[str, Any], *keys: str) -> Any:
+    cur: Any = cfg
     for k in keys:
-        if k not in cur:
+        if not isinstance(cur, Mapping) or k not in cur:
             raise ValueError(f"config missing: {'.'.join(keys)}")
         cur = cur[k]
     return cur
 
+
+
+def _find_list_values_at_paths(cfg: Any, allowed_prefixes: Sequence[str], *, ignore_paths: Sequence[str] = ("eval.tasks",)) -> List[str]:
+    hits: List[str] = []
+    ignore_set = set(ignore_paths)
+
+    def _is_ignored(path: str) -> bool:
+        return any(path == p or path.startswith(p + ".") or path.startswith(p + "[") for p in ignore_set)
+
+    def walk(x: Any, path: str = "") -> None:
+        if isinstance(x, Mapping):
+            for k, v in x.items():
+                p = f"{path}.{k}" if path else str(k)
+                walk(v, p)
+        elif isinstance(x, list):
+            if not _is_ignored(path):
+                if any(path == pref or path.startswith(pref + ".") or path.startswith(pref + "[") for pref in allowed_prefixes):
+                    hits.append(path or "<root>")
+            for i,v in enumerate(x):
+                walk(v, f"{path}[{i}]")
+    walk(cfg)
+    return hits
+
+
+def _reject_sweeps(cfg_snapshot: Mapping[str, Any], *, allow_sweep: bool) -> None:
+    sweepable = ["generation", "seed", "eval", "eval.num_prompts", "eval.mix"]
+    list_paths = _find_list_values_at_paths(cfg_snapshot, sweepable)
+    if list_paths and not allow_sweep:
+        raise ValueError(
+            f"Sweep-like config detected (lists under {sweepable}): {list_paths}. "
+            "Re-run with --allow_sweep if intended."
+        )
+
+
+
 # Load and validate the evaluation configuration from a YAML file.
 # Perform minimal schema checks, validates requested tasks and mix weights.
 # Return a normalized EvalConfig object with safe defaults applied.
-def load_config(path: str) -> EvalConfig:
+def load_config(path: str) -> Tuple[EvalConfig, Mapping[str, Any]]:
     with open(path, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
-    
-    model_id = _require(cfg, "model", "id")
-    eval_cfg = _require(cfg, "eval")
+        raw = yaml.safe_load(f)
+
+        if raw is None:
+            raise ValueError(f"Empty config: {path}")
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"Top-level config must be a mapping/dict: {path}")
+
+    model_id = _require(raw, "model", "id")
+    eval_cfg = _require(raw, "eval")
     tasks = _require(eval_cfg, "tasks")
     _require(eval_cfg, "num_prompts")
 
@@ -63,14 +102,15 @@ def load_config(path: str) -> EvalConfig:
         _validate_mix(mix)
 
     # Enforce deterministic decoding for all eval runs
-    _validate_deterministic_generation(cfg.get("generation", {}), where="eval")
+    _validate_deterministic_generation(raw.get("generation", {}), where="eval")
     
-    return EvalConfig(
+    cfg = EvalConfig(
         model_id = str(model_id),
-        seed = int(cfg.get("seed",0)),
-        generation = dict(cfg.get("generation", {})),
-        eval = dict(eval_cfg)
+        seed = int(raw.get("seed",0)),
+        generation = dict(raw.get("generation", {})),
+        eval_cfg = dict(eval_cfg)
     )
+    return cfg, raw
 
 
 # Map task names to the corresponding eval.mix bucket key so that expressions like mix[task_bucket(task)] work correctly.
@@ -436,7 +476,7 @@ def _git_sha() -> Optional[str]:
         return None
 
 
-def _gpu_info() -> dict:
+def _gpu_info() -> Dict[str, Any]:
     if not torch.cuda.is_available():
         return {"available": False}
     idx = torch.cuda.current_device()
@@ -446,7 +486,7 @@ def _gpu_info() -> dict:
     }
 
 
-def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, generation: dict, generation_resolved: dict, mode: str, model_checkpoint: str, eval_scope: dict) -> dict:
+def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, generation: dict, generation_resolved: dict, mode: str, model_checkpoint: str, eval_scope: dict, run_policy: dict) -> Dict[str, Any]:
     return {
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
         "mode": mode,
@@ -466,11 +506,12 @@ def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, 
         "transformers": transformers.__version__,
         "cuda": torch.version.cuda if torch.cuda.is_available() else None,
         "device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
-        "gpu": _gpu_info()
+        "gpu": _gpu_info(),
+        "run_policy": run_policy
     }
 
 
-def _write_run_artifacts(output_dir: str, cfg_snapshot: dict, meta: dict) -> None:
+def _write_run_artifacts(output_dir: str, cfg_snapshot: Mapping[str, Any], meta: Mapping[str, Any]) -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     with open(os.path.join(output_dir, "config_snapshot.yaml"), "w", encoding="utf-8") as f:
@@ -502,8 +543,11 @@ def _require_accelerate_if_needed(device_map: Optional[str]) -> None:
 
 
 # Execute the full evaluation pipeline defined by the config, including data generation, model inference, scoring, and aggregation, and write results to a single JSON file.
-def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optional[str]) -> str:
-    cfg = load_config(config_path)
+def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optional[str], allow_sweep: bool) -> str:
+    cfg, cfg_snapshot_raw = load_config(config_path)
+    
+    _reject_sweeps(cfg_snapshot_raw, allow_sweep=allow_sweep)
+    
     checkpoint = model_checkpoint or cfg.model_id
     _set_seeds(cfg.seed)
     rng = random.Random(cfg.seed)
@@ -517,13 +561,6 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
             f"{out_path} already exists. Choose a new --output_dir or delete the old run."
         )
     
-    cfg_snapshot = cfg.to_dict() if hasattr(cfg, "to_dict") else {
-        "model_id": cfg.model_id,
-        "seed": cfg.seed,
-        "eval": cfg.eval,
-        "generation": cfg.generation
-    }
-
 
     tokenizer = AutoTokenizer.from_pretrained(checkpoint, use_fast=True)
     if tokenizer.pad_token is None and tokenizer.eos_token is not None:
@@ -539,12 +576,12 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
     )
     model.eval()
 
-    tasks: List[str] = list(cfg.eval["tasks"])
-    total = int(cfg.eval["num_prompts"])
+    tasks: List[str] = list(cfg.eval_cfg["tasks"])
+    total = int(cfg.eval_cfg["num_prompts"])
 
     _validate_tasks(tasks)
 
-    mix = cfg.eval.get("mix")
+    mix = cfg.eval_cfg.get("mix")
 
     if mix is None:
         buckets = sorted(set(task_bucket(t) for t in tasks))
@@ -561,6 +598,12 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
         "counts": counts
     }
 
+    run_policy = {
+        "policy": "single_run_v1",
+        "run_count": 1,
+        "sweep_allowed": bool(allow_sweep)
+    }
+
     meta = _build_meta(
         config_path=config_path,
         output_dir=output_dir,
@@ -570,9 +613,10 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
         generation=cfg.generation,
         generation_resolved=gen_resolved,
         mode=mode,
-        eval_scope=eval_scope
+        eval_scope=eval_scope,
+        run_policy=run_policy
     )
-    _write_run_artifacts(output_dir, cfg_snapshot, meta)
+    _write_run_artifacts(output_dir, cfg_snapshot_raw, meta)
 
     results: Dict[str, Any] = {
         "results_version": 1,
@@ -609,7 +653,7 @@ def main() -> None:
         "--config",
         default="configs/eval.yaml",
         help="Path to the evaluation configuration file (YAML).",
-    )
+        )
     ap.add_argument(
         "--mode",
         default="baseline",
@@ -617,18 +661,23 @@ def main() -> None:
         help="Label for the run type (stored in meta.json)."
         )
     ap.add_argument(
+        "--allow_sweep",
+        action="store_true",
+        help="Allow list-valued (sweep-shaped) configs. Default: false (single-run only)."
+        )
+    ap.add_argument(
         "--checkpoint",
         default=None,
         help="Optional model checkpoint/path to evaluate (overrides model.id for loading; stored in meta.json)."
-    )
+        )
     ap.add_argument(
         "--output_dir",
         default="results/baseline",
         help="Directory where results.json will be written.",
-    )
+        )
     args = ap.parse_args()
 
-    out_path = run(args.config, args.output_dir, mode=args.mode, model_checkpoint=args.checkpoint)
+    out_path = run(args.config, args.output_dir, mode=args.mode, model_checkpoint=args.checkpoint, allow_sweep=args.allow_sweep)
     print(f"Wrote {out_path}")
 
 
