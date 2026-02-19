@@ -1,9 +1,12 @@
+import os
+# Must be set before any CUDA/cuBLAS initialization happens.
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
 import random
 import math
 import torch
 import yaml
 import re
-import os
 import json
 import argparse
 import subprocess
@@ -24,6 +27,17 @@ class EvalConfig:
         self.seed = seed
         self.generation = generation
         self.eval_cfg = eval_cfg
+
+
+# Enforce strict GPU determinism by disabling nondeterministic/cuDNN autotuned kernels and TF32, and requiring deterministic algorithms.
+def _enable_strict_determinism() -> None:
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+
+    torch.use_deterministic_algorithms(True)
 
 
 # Set random seeds to ensure reproducible behavior
@@ -545,7 +559,10 @@ def _require_accelerate_if_needed(device_map: Optional[str]) -> None:
 
 
 # Execute the full evaluation pipeline defined by the config, including data generation, model inference, scoring, and aggregation, and write results to a single JSON file.
-def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optional[str], allow_sweep: bool) -> str:
+def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optional[str], allow_sweep: bool, strict_determinism: bool) -> str:
+    if strict_determinism:
+        _enable_strict_determinism()
+    
     cfg, cfg_snapshot_raw = load_config(config_path)
     
     _reject_sweeps(cfg_snapshot_raw, allow_sweep=allow_sweep)
@@ -604,7 +621,8 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
     run_policy = {
         "policy": "single_run_v1",
         "run_count": 1,
-        "sweep_allowed": bool(allow_sweep)
+        "sweep_allowed": bool(allow_sweep),
+        "strict_determinism": bool(strict_determinism)
     }
 
     meta = _build_meta(
@@ -655,7 +673,7 @@ def main() -> None:
     ap.add_argument(
         "--config",
         default="configs/eval.yaml",
-        help="Path to the evaluation configuration file (YAML).",
+        help="Path to the evaluation configuration file (YAML)."
         )
     ap.add_argument(
         "--mode",
@@ -669,6 +687,11 @@ def main() -> None:
         help="Allow list-valued (sweep-shaped) configs. Default: false (single-run only)."
         )
     ap.add_argument(
+    "--strict_determinism",
+    action="store_true",
+    help="Enable torch/cuDNN/CUBLAS deterministic settings (slower; may raise on nondet ops)."
+        )
+    ap.add_argument(
         "--checkpoint",
         default=None,
         help="Optional model checkpoint/path to evaluate (overrides model.id for loading; stored in meta.json)."
@@ -676,11 +699,11 @@ def main() -> None:
     ap.add_argument(
         "--output_dir",
         default="results/baseline",
-        help="Directory where results.json will be written.",
+        help="Directory where results.json will be written."
         )
     args = ap.parse_args()
 
-    out_path = run(args.config, args.output_dir, mode=args.mode, model_checkpoint=args.checkpoint, allow_sweep=args.allow_sweep)
+    out_path = run(args.config, args.output_dir, mode=args.mode, model_checkpoint=args.checkpoint, allow_sweep=args.allow_sweep, strict_determinism=args.strict_determinism)
     print(f"Wrote {out_path}")
 
 
