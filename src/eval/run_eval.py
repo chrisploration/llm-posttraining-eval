@@ -16,7 +16,7 @@ import platform
 import socket
 
 from datetime import datetime, timezone
-from typing import Callable, Dict, Sequence, Mapping, List, Any, Optional, Tuple
+from typing import Callable, Dict, Sequence, Mapping, List, Any, Optional, Tuple, Iterable
 
 from transformers import PreTrainedTokenizerBase, PreTrainedModel, AutoTokenizer, AutoModelForCausalLM
 
@@ -127,10 +127,17 @@ def load_config(path: str) -> Tuple[EvalConfig, Mapping[str, Any]]:
     return cfg, raw
 
 
-# Map task names to the corresponding eval.mix bucket key so that expressions like mix[task_bucket(task)] work correctly.
+_TASK_TO_BUCKET: Dict[str, str] = {
+    "basic_capability": "capability",
+    "robustness": "robustness",
+    "safety": "safety"
+}
+
 def task_bucket(task: str) -> str:
-    mapping = {"basic_capability": "capability"}
-    return mapping.get(task, task)
+    try:
+        return _TASK_TO_BUCKET[task]
+    except KeyError as e:
+        raise ValueError(f"Unknown task for bucketing: {task}") from e
 
 
 
@@ -341,11 +348,17 @@ def run_basic_capability(*, n: int, rng: random.Random, model, tokenizer, gen_pa
         correct.append(ok)
         samples.append(
             {
+                "task": "basic_capability",
                 "id": it["id"],
                 "prompt": it["prompt"],
+                "expected": it["answer"],
+                "prediction": pred,
+                "score": ok,
+                "failure_reason": None if ok == 1 else "wrong_answer",
                 "answer": it["answer"],
                 "pred": pred,
-                "output": out
+                "output": out,
+                "is_correct": bool(ok)
             }
         )
 
@@ -368,16 +381,26 @@ def run_robustness(*, n: int, rng: random.Random, model, tokenizer, gen_params: 
         ok_pert, pred_pert = score_arithmetic(it["answer"], out_pert)
         pert_correct.append(ok_pert)
 
+        # Define a single canonical "prediction" for failure analysis.
+        robust_ok = 1 if (pred_pert == it["answer"]) else 0
+
         samples.append(
             {
+                "task": "robustness",
                 "id": it["id"],
+                "expected": it["answer"],
+                "prediction": pred_pert,
+                "score": robust_ok,
+                "failure_reason": None if robust_ok == 1 else "wrong_answer_perturbed",
                 "prompt_original": it["prompt_original"],
                 "prompt_perturbed": it["prompt"],
                 "answer": it["answer"],
                 "pred_base": pred_base,
                 "pred_pert": pred_pert,
                 "output_base": out_base,
-                "output_pert": out_pert
+                "output_pert": out_pert,
+                "is_correct_base": bool(ok_base),
+                "is_correct_pert": bool(ok_pert)
             }
         )
 
@@ -402,10 +425,31 @@ def run_safety(*, n: int, rng: random.Random, model, tokenizer, gen_params: Mapp
         out = generate_text(model, tokenizer, it["prompt"], gen_params)
         label = score_safety(bool(it["should_refuse"]), out)
         counts_by_label[label] += 1
+        
+
+        expected = "refuse" if bool(it["should_refuse"]) else "comply"
+        failure_reason = None
+
+        if label == "unsafe_comply":
+            failure_reason = "unsafe_compliance"
+        elif label == "over_refuse":
+            failure_reason = "over_refusal"
+
+
+        if label in ("refuse_correct", "ok_comply"):
+            score = 1
+        else:
+            score = 0
+
         samples.append(
             {
+                "task": "safety",
                 "id": it["id"],
                 "prompt": it["prompt"],
+                "expected": expected,
+                "prediction": label,
+                "score": score,
+                "failure_reason": failure_reason,
                 "should_refuse": bool(it["should_refuse"]),
                 "label": label,
                 "output": out
@@ -527,17 +571,111 @@ def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, 
     }
 
 
+def _guard_output_dir(output_dir: str, *, overwrite: bool) -> None:
+    if not os.path.exists(output_dir):
+        return
+
+    marker = os.path.join(output_dir, "meta.json")
+    if os.path.exists(marker) and not overwrite:
+        raise FileExistsError(
+            f"Refusing to overwrite existing run dir: {output_dir} (meta.json present). "
+            "Use --overwrite or choose a fresh --output_dir."
+        )
+
+    if overwrite:
+        leftovers = os.listdir(output_dir)
+        if leftovers:
+            raise FileExistsError(
+                f"--overwrite set, but output_dir is not empty: {output_dir}. "
+                f"Delete its contents or choose a fresh --output_dir."
+            )
+    
+
+    
+
 def _write_run_artifacts(output_dir: str, cfg_snapshot: Mapping[str, Any], meta: Mapping[str, Any]) -> None:
     os.makedirs(output_dir, exist_ok=True)
 
-    with open(os.path.join(output_dir, "config_snapshot.yaml"), "w", encoding="utf-8") as f:
-        yaml.safe_dump(cfg_snapshot, f, sort_keys=False)
+    snap_path = os.path.join(output_dir, "config_snapshot.yaml")
+    snap_text = yaml.safe_dump(cfg_snapshot, sort_keys=False)
+    with open(snap_path, "w", encoding="utf-8") as f:
+        f.write(snap_text)
+        if not snap_text.endswith("\n"):
+            f.write("\n")
 
-    with open(os.path.join(output_dir, "meta.json"), "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2, sort_keys=True)
+    meta_path = os.path.join(output_dir, "meta.json")
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2, sort_keys=True, ensure_ascii=False)
+        f.write("\n")
 
 
+def _write_json(path: str, obj: Mapping[str, Any]) -> None:
+    dirpath = os.path.dirname(path)
+    if dirpath:
+        os.makedirs(dirpath, exist_ok=True)
 
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2, sort_keys=True, ensure_ascii=False)
+        f.write("\n")
+
+
+def _write_jsonl(path: str, rows: Iterable[Mapping[str, Any]]) -> None:
+    dirpath = os.path.dirname(path)
+    if dirpath:
+        os.makedirs(dirpath, exist_ok=True)
+
+    with open(path, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+def _is_failure(sample: Dict[str, Any]) -> bool:
+    fr = sample.get("failure_reason")
+    if fr:
+        return True
+
+    task = sample.get("task")
+    if task in ("basic_capability", "robustness"):
+        return sample.get("prediction") != sample.get("expected")
+
+    if task == "safety":
+        # In your scoring, "unsafe_comply" and "over_refuse" are failures.
+        return sample.get("prediction") in ("unsafe_comply", "over_refuse")
+
+    raise ValueError(f"Unknown task in sample: {task}")
+
+
+def _select_representative_samples(all_samples: List[Dict[str, Any]], *, per_task: int = 5, max_total: int = 200) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    seen_per_task: Dict[str, int] = {}
+    for s in all_samples:
+        t = str(s.get("task", "unknown"))
+        k = seen_per_task.get(t, 0)
+        if k >= per_task:
+            continue
+        out.append(s)
+        seen_per_task[t] = k + 1
+        if len(out) >= max_total:
+            break
+    return out
+
+def _bucket_failures(all_samples: List[Dict[str, Any]], task_bucket_fn) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for s in all_samples:
+        if not _is_failure(s):
+            continue
+        task = str(s.get("task", "unknown"))
+        b = task_bucket_fn(task)
+        rows.append({
+            "bucket": b,
+            "task": task,
+            "id": s.get("id"),
+            "failure_reason": s.get("failure_reason"),
+            "expected": s.get("expected"),
+            "prediction": s.get("prediction"),
+            "score": s.get("score")
+        })
+    return rows
 
 
 # Python already fails fast for missing required imports.
@@ -559,7 +697,7 @@ def _require_accelerate_if_needed(device_map: Optional[str]) -> None:
 
 
 # Execute the full evaluation pipeline defined by the config, including data generation, model inference, scoring, and aggregation, and write results to a single JSON file.
-def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optional[str], allow_sweep: bool, strict_determinism: bool) -> str:
+def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optional[str], allow_sweep: bool, strict_determinism: bool, overwrite: bool) -> str:
     if strict_determinism:
         _enable_strict_determinism()
     
@@ -571,12 +709,13 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
     _set_seeds(cfg.seed)
     rng = random.Random(cfg.seed)
 
+    _guard_output_dir(output_dir, overwrite=overwrite)
     os.makedirs(output_dir, exist_ok=True)
 
     out_path = os.path.join(output_dir, "results.json")
-    if os.path.exists(out_path):
+    if os.path.exists(out_path) and not overwrite:
         raise FileExistsError(
-            f"{out_path} already exists. Choose a new --output_dir or delete the old run."
+            f"{out_path} already exists. Choose a new --output_dir or delete the old run, or pass --overwrite."
         )
     
 
@@ -651,18 +790,35 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
         "samples": {}
     }
 
+    all_samples: List[Dict[str, Any]] = []
+
     for task in tasks:
         n = int(counts.get(task, 0))
         fn = TASK_REGISTRY[task]
         metrics, samples = fn(n=n, rng=rng, model=model, tokenizer=tokenizer, gen_params=gen_params)
         results["metrics"][task] = metrics
         results["samples"][task] = samples[:10]
+        all_samples.extend(samples)
 
     missing = sorted(set(tasks) - set(results["metrics"].keys()))
     if missing:
         raise RuntimeError(f"Runner did not produce metrics for: {missing}")
         
-    with open(out_path, "w", encoding="utf-8") as f: json.dump(results, f, indent=2, ensure_ascii=False)
+    metrics_path = os.path.join(output_dir, "metrics.json")
+    _write_json(metrics_path, results["metrics"])
+
+    rep = _select_representative_samples(all_samples, per_task=5, max_total=200)
+    samples_path = os.path.join(output_dir, "samples.jsonl")
+    _write_jsonl(samples_path, rep)
+
+    fail_rows = _bucket_failures(all_samples, task_bucket)
+    failures_path = os.path.join(output_dir, "failures.jsonl")
+    _write_jsonl(failures_path, fail_rows)
+
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2, sort_keys=True, ensure_ascii=False)
+        f.write("\n")
 
     return out_path
 
@@ -701,9 +857,14 @@ def main() -> None:
         default="results/baseline",
         help="Directory where results.json will be written."
         )
+    ap.add_argument(
+    "--overwrite",
+    action="store_true",
+    help="Allow using --output_dir only if it exists but is empty (prevents mixed runs)."
+    )
     args = ap.parse_args()
 
-    out_path = run(args.config, args.output_dir, mode=args.mode, model_checkpoint=args.checkpoint, allow_sweep=args.allow_sweep, strict_determinism=args.strict_determinism)
+    out_path = run(args.config, args.output_dir, mode=args.mode, model_checkpoint=args.checkpoint, allow_sweep=args.allow_sweep, strict_determinism=args.strict_determinism, overwrite=args.overwrite)
     print(f"Wrote {out_path}")
 
 
