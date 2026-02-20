@@ -9,7 +9,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments,
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from datasets import load_dataset
 from trl import SFTTrainer
-from train_artifacts import guard_output_dir_empty, write_yaml, write_json, build_train_meta, append_jsonl
+from train_artifacts import guard_output_dir_empty, write_yaml, write_json, build_train_meta, append_jsonl, require_accelerate_if_needed
 
 
 
@@ -19,7 +19,9 @@ def build_model(cfg: PostTrainConfig) -> Tuple[torch.nn.Module, AutoTokenizer]:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model_kwargs = {"device_map": "auto"}
+    device_map = "auto" if torch.cuda.is_available() else None
+    require_accelerate_if_needed(device_map)
+    model_kwargs = {"device_map": device_map} if device_map is not None else {}
 
     if cfg.load_in_4bit:
         # Fail fast with a clear error if bitsandbytes is missing.
