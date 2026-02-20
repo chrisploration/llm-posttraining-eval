@@ -21,6 +21,8 @@ from typing import Callable, Dict, Sequence, Mapping, List, Any, Optional, Tuple
 
 from transformers import PreTrainedTokenizerBase, PreTrainedModel, AutoTokenizer, AutoModelForCausalLM
 
+from train_artifacts import require_accelerate_if_needed
+
 
 class EvalConfig:
     def __init__(self, model_id, seed, generation, eval_cfg):
@@ -679,23 +681,6 @@ def _bucket_failures(all_samples: List[Dict[str, Any]], task_bucket_fn) -> List[
     return rows
 
 
-# Python already fails fast for missing required imports.
-# This check adds the same fail-fast behavior for an optional dependency
-# that is only needed when device_map="auto" is enabled.
-def _require_accelerate_if_needed(device_map: Optional[str]) -> None:
-    if device_map != "auto":
-        return
-    try:
-        import accelerate  # noqa: F401
-    except Exception as e:
-        raise RuntimeError(
-            "device_map='auto' requires the 'accelerate' package. "
-            "Install accelerate or set device_map=None."
-        ) from e
-
-
-
-
 
 # Execute the full evaluation pipeline defined by the config, including data generation, model inference, scoring, and aggregation, and write results to a single JSON file.
 def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optional[str], allow_sweep: bool, strict_determinism: bool) -> str:
@@ -723,7 +708,7 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
     gen_params = _resolve_generation_params(cfg.generation, tokenizer=tokenizer)
 
     device_map = "auto" if torch.cuda.is_available() else None
-    _require_accelerate_if_needed(device_map)
+    require_accelerate_if_needed(device_map)
 
     model = AutoModelForCausalLM.from_pretrained(
         checkpoint,
