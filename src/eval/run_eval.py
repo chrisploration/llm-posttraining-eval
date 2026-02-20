@@ -14,6 +14,7 @@ import sys
 import transformers
 import platform
 import socket
+import copy
 
 from datetime import datetime, timezone
 from typing import Callable, Dict, Sequence, Mapping, List, Any, Optional, Tuple, Iterable
@@ -571,29 +572,22 @@ def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, 
     }
 
 
-def _guard_output_dir(output_dir: str, *, overwrite: bool) -> None:
+def _guard_output_dir(output_dir: str) -> None:
     if not os.path.exists(output_dir):
         return
-
-    marker = os.path.join(output_dir, "meta.json")
-    if os.path.exists(marker) and not overwrite:
-        raise FileExistsError(
-            f"Refusing to overwrite existing run dir: {output_dir} (meta.json present). "
-            "Use --overwrite or choose a fresh --output_dir."
-        )
-
-    if overwrite:
-        leftovers = os.listdir(output_dir)
-        if leftovers:
-            raise FileExistsError(
-                f"--overwrite set, but output_dir is not empty: {output_dir}. "
-                f"Delete its contents or choose a fresh --output_dir."
-            )
     
+    leftovers = os.listdir(output_dir)
+    if not leftovers:
+        return
+
+    raise FileExistsError(
+        f"Refusing to use non-empty output_dir: {output_dir}. "
+        "Choose a fresh --output_dir or delete its contents."
+    )
 
     
 
-def _write_run_artifacts(output_dir: str, cfg_snapshot: Mapping[str, Any], meta: Mapping[str, Any]) -> None:
+def _write_run_artifacts(output_dir: str, cfg_snapshot: Mapping[str, Any], cfg_resolved: Mapping[str, Any], meta: Mapping[str, Any]) -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     snap_path = os.path.join(output_dir, "config_snapshot.yaml")
@@ -601,6 +595,13 @@ def _write_run_artifacts(output_dir: str, cfg_snapshot: Mapping[str, Any], meta:
     with open(snap_path, "w", encoding="utf-8") as f:
         f.write(snap_text)
         if not snap_text.endswith("\n"):
+            f.write("\n")
+
+    resolved_path = os.path.join(output_dir, "config_resolved.yaml")
+    resolved_text = yaml.safe_dump(cfg_resolved, sort_keys=False)
+    with open(resolved_path, "w", encoding="utf-8") as f:
+        f.write(resolved_text)
+        if not resolved_text.endswith("\n"):
             f.write("\n")
 
     meta_path = os.path.join(output_dir, "meta.json")
@@ -697,7 +698,7 @@ def _require_accelerate_if_needed(device_map: Optional[str]) -> None:
 
 
 # Execute the full evaluation pipeline defined by the config, including data generation, model inference, scoring, and aggregation, and write results to a single JSON file.
-def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optional[str], allow_sweep: bool, strict_determinism: bool, overwrite: bool) -> str:
+def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optional[str], allow_sweep: bool, strict_determinism: bool) -> str:
     if strict_determinism:
         _enable_strict_determinism()
     
@@ -709,14 +710,10 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
     _set_seeds(cfg.seed)
     rng = random.Random(cfg.seed)
 
-    _guard_output_dir(output_dir, overwrite=overwrite)
+    _guard_output_dir(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     out_path = os.path.join(output_dir, "results.json")
-    if os.path.exists(out_path) and not overwrite:
-        raise FileExistsError(
-            f"{out_path} already exists. Choose a new --output_dir or delete the old run, or pass --overwrite."
-        )
     
 
     tokenizer = AutoTokenizer.from_pretrained(checkpoint, use_fast=True)
@@ -750,6 +747,12 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
 
     counts = allocate_counts(total=total, tasks=tasks, mix=mix)
 
+    cfg_resolved = copy.deepcopy(cfg_snapshot_raw)
+    cfg_resolved.setdefault("eval", {})
+    cfg_resolved["eval"]["mix"] = mix
+    cfg_resolved["eval"]["counts"] = counts
+    cfg_resolved["generation_resolved"] = gen_params
+
     eval_scope = {
         "tasks": tasks,
         "num_prompts": total,
@@ -776,7 +779,7 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
         eval_scope=eval_scope,
         run_policy=run_policy
     )
-    _write_run_artifacts(output_dir, cfg_snapshot_raw, meta)
+    _write_run_artifacts(output_dir, cfg_snapshot_raw, cfg_resolved, meta)
 
     results: Dict[str, Any] = {
         "results_version": 1,
@@ -857,14 +860,9 @@ def main() -> None:
         default="results/baseline",
         help="Directory where results.json will be written."
         )
-    ap.add_argument(
-    "--overwrite",
-    action="store_true",
-    help="Allow using --output_dir only if it exists but is empty (prevents mixed runs)."
-    )
     args = ap.parse_args()
 
-    out_path = run(args.config, args.output_dir, mode=args.mode, model_checkpoint=args.checkpoint, allow_sweep=args.allow_sweep, strict_determinism=args.strict_determinism, overwrite=args.overwrite)
+    out_path = run(args.config, args.output_dir, mode=args.mode, model_checkpoint=args.checkpoint, allow_sweep=args.allow_sweep, strict_determinism=args.strict_determinism)
     print(f"Wrote {out_path}")
 
 
