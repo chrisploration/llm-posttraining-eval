@@ -2,12 +2,14 @@ from config import load_config, PostTrainConfig
 
 import torch
 import os
+import yaml
 
 from typing import Tuple
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, set_seed
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, set_seed, TrainerCallback
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from datasets import load_dataset
 from trl import SFTTrainer
+from train_artifacts import guard_output_dir_empty, write_yaml, write_json, build_train_meta, append_jsonl
 
 
 
@@ -100,6 +102,23 @@ def load_data(cfg: PostTrainConfig, tokenizer: AutoTokenizer):
     return ds
 
 
+
+
+class JsonlLoggerCallback(TrainerCallback):
+    def __init__(self, path: str):
+        self.path = path
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if not logs:
+            return
+        row = {"step": int(state.global_step)}
+        for k, v in logs.items():
+            if isinstance(v, (int, float)):
+                row[k] = float(v)
+        append_jsonl(self.path, row)
+
+
+
 def run_training(
     cfg: PostTrainConfig,
     model: torch.nn.Module,
@@ -108,6 +127,8 @@ def run_training(
 ) -> None:
     
     os.makedirs(cfg.output_dir, exist_ok=True)
+
+    log_path = os.path.join(cfg.output_dir, "train_log.jsonl")
 
     args = TrainingArguments(
         output_dir=cfg.output_dir,
@@ -131,7 +152,8 @@ def run_training(
         dataset_text_field="text",
         max_seq_length=cfg.max_seq_length,
         args=args,
-        packing=False  # v1: predictable behavior
+        packing=False,  # v1: predictable behavior
+        callbacks=[JsonlLoggerCallback(log_path)]
     )
 
     trainer.train()
@@ -145,12 +167,34 @@ def run_training(
 
 
 def main():
-    cfg = load_config("configs/posttrain.yaml")
+    config_path = "configs/posttrain.yaml"
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        raw_cfg = yaml.safe_load(f) or {}
+
+    cfg = load_config(config_path)
     set_seed(cfg.seed)
+
+    guard_output_dir_empty(cfg.output_dir)
+    os.makedirs(cfg.output_dir, exist_ok=True)
+
+    write_yaml(os.path.join(cfg.output_dir, "config_snapshot.yaml"), raw_cfg)
+
+    resolved_view = dict(raw_cfg)
+    resolved_view["resolved"] = cfg.to_dict()
+    write_yaml(os.path.join(cfg.output_dir, "config_resolved.yaml"), resolved_view)
 
     # Post-training pipeline
     model, tokenizer = build_model(cfg)
     train_dataset = load_data(cfg, tokenizer)
+
+    meta = build_train_meta(
+        output_dir=cfg.output_dir,
+        cfg_dict=raw_cfg,
+        dataset_size_used=len(train_dataset)
+    )
+    write_json(os.path.join(cfg.output_dir, "meta.json"), meta)
+
     run_training(cfg, model, tokenizer, train_dataset)
 
 
