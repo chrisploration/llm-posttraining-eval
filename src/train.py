@@ -82,7 +82,7 @@ def load_data(cfg: PostTrainConfig, tokenizer: AutoTokenizer):
             raise ValueError("Empty/invalid messages in one training example")
 
         # Prefer model's chat template if available
-        if hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template:
+        if hasattr(tokenizer, "apply_chat_template") and getattr(tokenizer, "chat_template", None):
             return tokenizer.apply_chat_template(norm, tokenize=False)
 
         # Fallback: explicit role tags
