@@ -722,7 +722,7 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
 
     gen_params = _resolve_generation_params(cfg.generation, tokenizer=tokenizer)
 
-    device_map = "auto"
+    device_map = "auto" if torch.cuda.is_available() else None
     _require_accelerate_if_needed(device_map)
 
     model = AutoModelForCausalLM.from_pretrained(
