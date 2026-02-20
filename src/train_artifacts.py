@@ -12,6 +12,18 @@ from typing import Optional, Mapping, Any
 from datetime import datetime, timezone
 
 
+def require_accelerate_if_needed(device_map: Optional[str]) -> None:
+    if device_map != "auto":
+        return
+    try:
+        import accelerate  # noqa: F401
+    except Exception as e:
+        raise RuntimeError(
+            "device_map='auto' requires the 'accelerate' package. "
+            "Install accelerate or set device_map=None."
+        ) from e
+
+
 def _git_sha() -> Optional[str]:
     try:
         return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
