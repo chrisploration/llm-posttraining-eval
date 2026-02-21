@@ -16,11 +16,14 @@ from train_artifacts import guard_output_dir_empty, write_yaml, write_json, buil
 
 def build_model(cfg: PostTrainConfig) -> Tuple[torch.nn.Module, AutoTokenizer]:
     tokenizer = AutoTokenizer.from_pretrained(cfg.base_id, use_fast=True)
+
+    added_tokens = 0
+
     if tokenizer.pad_token is None:
         if tokenizer.eos_token is not None:
             tokenizer.pad_token = tokenizer.eos_token
         else:
-            tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+            added_tokens = tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
     device_map = "auto" if torch.cuda.is_available() else None
     require_accelerate_if_needed(device_map)
@@ -42,6 +45,9 @@ def build_model(cfg: PostTrainConfig) -> Tuple[torch.nn.Module, AutoTokenizer]:
         )
 
     model = AutoModelForCausalLM.from_pretrained(cfg.base_id, **model_kwargs)
+    
+    if added_tokens > 0:
+        model.resize_token_embeddings(len(tokenizer))
 
     if cfg.gradient_checkpointing:
         model.gradient_checkpointing_enable()
