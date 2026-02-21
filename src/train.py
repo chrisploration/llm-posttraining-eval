@@ -49,10 +49,13 @@ def build_model(cfg: PostTrainConfig) -> Tuple[torch.nn.Module, AutoTokenizer]:
     if added_tokens > 0:
         model.resize_token_embeddings(len(tokenizer))
 
+    if hasattr(model, "config") and getattr(tokenizer, "pad_token_id", None) is not None:
+        model.config.pad_token_id = tokenizer.pad_token_id
+
     if cfg.gradient_checkpointing:
         model.gradient_checkpointing_enable()
-        if hasattr(model, "config") and getattr(tokenizer, "pad_token_id", None) is not None:
-            model.config.pad_token_id = tokenizer.pad_token_id
+        if hasattr(model, "config") and hasattr(model.config, "use_cache"):
+            model.config.use_cache = False
 
     if cfg.load_in_4bit:
         model = prepare_model_for_kbit_training(model)
