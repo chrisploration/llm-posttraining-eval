@@ -45,14 +45,14 @@ def build_model(cfg: PostTrainConfig) -> Tuple[torch.nn.Module, AutoTokenizer]:
         )
 
     model = AutoModelForCausalLM.from_pretrained(cfg.base_id, **model_kwargs)
-    
+
     if added_tokens > 0:
         model.resize_token_embeddings(len(tokenizer))
 
     if cfg.gradient_checkpointing:
         model.gradient_checkpointing_enable()
-        if hasattr(model, "config") and hasattr(model.config, "use_cache"):
-            model.config.use_cache = False
+        if hasattr(model, "config") and getattr(tokenizer, "pad_token_id", None) is not None:
+            model.config.pad_token_id = tokenizer.pad_token_id
 
     if cfg.load_in_4bit:
         model = prepare_model_for_kbit_training(model)
