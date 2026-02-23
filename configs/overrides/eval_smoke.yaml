@@ -1,0 +1,3 @@
+# Smoke tier override: fast infrastructure validation
+eval:
+  num_prompts: 50

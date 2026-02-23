@@ -94,11 +94,37 @@ def _reject_sweeps(cfg_snapshot: Mapping[str, Any], *, allow_sweep: bool) -> Non
         )
 
 
+def _deep_merge(base: Dict[str, Any], override: Mapping[str, Any]) -> Dict[str, Any]:
+    if not isinstance(base, dict):
+        raise TypeError(f"_deep_merge base must be dict, got {type(base).__name__}")
+
+    for k, v in override.items():
+        if isinstance(v, Mapping) and isinstance(base.get(k), dict):
+            child = base.get(k)
+            if not isinstance(child, dict):
+                raise TypeError(
+                    f"_deep_merge expected dict at key '{k}', got {type(child).__name__}"
+                )
+            _deep_merge(child, v)
+        else:
+            base[k] = v
+    return base
+
+
+def _load_yaml_mapping(path: str) -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
+        obj = yaml.safe_load(f)
+    if obj is None:
+        return {}
+    if not isinstance(obj, Mapping):
+        raise ValueError(f"Override YAML must be a mapping/dict at top-level: {path}")
+    return dict(obj)
+
 
 # Load and validate the evaluation configuration from a YAML file.
 # Perform minimal schema checks, validates requested tasks and mix weights.
 # Return a normalized EvalConfig object with safe defaults applied.
-def load_config(path: str) -> Tuple[EvalConfig, Mapping[str, Any]]:
+def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) -> Tuple[EvalConfig, Mapping[str, Any]]:
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
@@ -106,6 +132,13 @@ def load_config(path: str) -> Tuple[EvalConfig, Mapping[str, Any]]:
             raise ValueError(f"Empty config: {path}")
         if not isinstance(raw, Mapping):
             raise ValueError(f"Top-level config must be a mapping/dict: {path}")
+
+    # overrides
+    if override_paths:
+        raw = dict(raw)
+        for opath in override_paths:
+            ov = _load_yaml_mapping(opath)
+            _deep_merge(raw, ov)
 
     model_id = _require(raw, "model", "id")
     eval_cfg = _require(raw, "eval")
@@ -549,11 +582,12 @@ def _gpu_info() -> Dict[str, Any]:
     }
 
 
-def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, generation: Mapping[str, Any], generation_resolved: Mapping[str, Any], mode: str, model_checkpoint: str, eval_scope: Mapping[str, Any], run_policy: Mapping[str, Any]) -> Dict[str, Any]:
+def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, generation: Mapping[str, Any], generation_resolved: Mapping[str, Any], mode: str, model_checkpoint: str, eval_scope: Mapping[str, Any], run_policy: Mapping[str, Any], override_paths: Sequence[str]) -> Dict[str, Any]:
     return {
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
         "mode": mode,
         "config_path": config_path,
+        "override_paths": list(override_paths),
         "output_dir": output_dir,
         "model_id": model_id,
         "model_checkpoint": model_checkpoint,
@@ -587,6 +621,13 @@ def _guard_output_dir(output_dir: str) -> None:
         "Choose a fresh --output_dir or delete its contents."
     )
 
+
+def _is_peft_adapter_dir(path: Optional[str]) -> bool:
+    if not path:
+        return False
+    if not os.path.isdir(path):
+        return False
+    return os.path.exists(os.path.join(path, "adapter_config.json"))
     
 
 def _write_run_artifacts(output_dir: str, cfg_snapshot: Mapping[str, Any], cfg_resolved: Mapping[str, Any], meta: Mapping[str, Any]) -> None:
@@ -683,15 +724,25 @@ def _bucket_failures(all_samples: List[Dict[str, Any]], task_bucket_fn) -> List[
 
 
 # Execute the full evaluation pipeline defined by the config, including data generation, model inference, scoring, and aggregation, and write results to a single JSON file.
-def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optional[str], allow_sweep: bool, strict_determinism: bool) -> str:
+def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optional[str], base_model: Optional[str], allow_sweep: bool, strict_determinism: bool, override_paths: Sequence[str]) -> str:
     if strict_determinism:
         _enable_strict_determinism()
     
-    cfg, cfg_snapshot_raw = load_config(config_path)
+    cfg, cfg_snapshot_raw = load_config(config_path, override_paths=override_paths)
     
     _reject_sweeps(cfg_snapshot_raw, allow_sweep=allow_sweep)
     
     checkpoint = model_checkpoint or cfg.model_id
+    base_model_id = cfg.model_id
+    if base_model is not None:
+        base_model_id = base_model
+
+    # Fail fast if the "checkpoint" is an adapter dir but we don't have a real base model.
+    if _is_peft_adapter_dir(checkpoint) and (base_model is None) and (base_model_id == checkpoint):
+        raise ValueError(
+            "Checkpoint looks like a PEFT adapter directory. Provide --base_model (or set model.id to the base model)."
+            )
+
     _set_seeds(cfg.seed)
     rng = random.Random(cfg.seed)
 
@@ -701,20 +752,43 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
     out_path = os.path.join(output_dir, "results.json")
     
 
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint, use_fast=True)
-    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    gen_params = _resolve_generation_params(cfg.generation, tokenizer=tokenizer)
-
     device_map = "auto" if torch.cuda.is_available() else None
     require_accelerate_if_needed(device_map)
 
-    model = AutoModelForCausalLM.from_pretrained(
-        checkpoint,
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-        device_map=device_map
-    )
+    torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+
+    if _is_peft_adapter_dir(checkpoint):
+        try:
+            from peft import PeftModel
+        except Exception as e:
+            raise ImportError(
+                "PEFT is required to evaluate adapter checkpoints. Install with: pip install peft"
+            ) from e
+
+        tokenizer = AutoTokenizer.from_pretrained(base_model_id, use_fast=True)
+        if tokenizer.pad_token is None and tokenizer.eos_token is not None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        base = AutoModelForCausalLM.from_pretrained(
+            base_model_id,
+            torch_dtype=torch_dtype,
+            device_map=device_map,
+        )
+        model = PeftModel.from_pretrained(base, checkpoint)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(checkpoint, use_fast=True)
+        if tokenizer.pad_token is None and tokenizer.eos_token is not None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        model = AutoModelForCausalLM.from_pretrained(
+            checkpoint,
+            torch_dtype=torch_dtype,
+            device_map=device_map,
+        )
+
+
+    gen_params = _resolve_generation_params(cfg.generation, tokenizer=tokenizer)
+
     model.eval()
 
     tasks: List[str] = list(cfg.eval_cfg["tasks"])
@@ -742,7 +816,10 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
         "tasks": tasks,
         "num_prompts": total,
         "mix": mix,
-        "counts": counts
+        "counts": counts,
+        "checkpoint": checkpoint,
+        "base_model_id": base_model_id,
+        "checkpoint_is_adapter": _is_peft_adapter_dir(checkpoint)
     }
 
     run_policy = {
@@ -762,7 +839,8 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
         generation_resolved=gen_params,
         mode=mode,
         eval_scope=eval_scope,
-        run_policy=run_policy
+        run_policy=run_policy,
+        override_paths=override_paths
     )
     _write_run_artifacts(output_dir, cfg_snapshot_raw, cfg_resolved, meta)
 
@@ -820,9 +898,15 @@ def main() -> None:
         help="Path to the evaluation configuration file (YAML)."
         )
     ap.add_argument(
+    "--override",
+    action="append",
+    default=[],
+    help="Path to an override YAML file. Can be repeated; applied in order."
+    )
+    ap.add_argument(
         "--mode",
         default="baseline",
-        choices=["baseline", "posttrained"],
+        choices=["smoke", "baseline", "extended", "posttrained"],
         help="Label for the run type (stored in meta.json)."
         )
     ap.add_argument(
@@ -841,13 +925,18 @@ def main() -> None:
         help="Optional model checkpoint/path to evaluate (overrides model.id for loading; stored in meta.json)."
         )
     ap.add_argument(
+    "--base_model",
+    default=None,
+    help="Base model id/path to use when --checkpoint points to a PEFT adapter directory."
+    )
+    ap.add_argument(
         "--output_dir",
         default="results/baseline",
         help="Directory where results.json will be written."
         )
     args = ap.parse_args()
 
-    out_path = run(args.config, args.output_dir, mode=args.mode, model_checkpoint=args.checkpoint, allow_sweep=args.allow_sweep, strict_determinism=args.strict_determinism)
+    out_path = run(args.config, args.output_dir, mode=args.mode, model_checkpoint=args.checkpoint, base_model=args.base_model, allow_sweep=args.allow_sweep, strict_determinism=args.strict_determinism, override_paths=args.override)
     print(f"Wrote {out_path}")
 
 

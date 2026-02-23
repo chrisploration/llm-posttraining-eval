@@ -1,0 +1,6 @@
+# Stress tier override: isolate robustness task at higher volume for focused diagnostics
+eval:
+  tasks: ["robustness"]
+  num_prompts: 1000
+  mix:
+    robustness: 1.0
