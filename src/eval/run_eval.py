@@ -21,7 +21,9 @@ from typing import Callable, Dict, Sequence, Mapping, List, Any, Optional, Tuple
 
 from transformers import PreTrainedTokenizerBase, PreTrainedModel, AutoTokenizer, AutoModelForCausalLM
 
-from train_artifacts import require_accelerate_if_needed
+# Absolute import from the src package so that `import src.eval.run_eval`
+# works correctly in unit tests and when executed via `python -m`.
+from src.train_artifacts import require_accelerate_if_needed
 
 
 class EvalConfig:
