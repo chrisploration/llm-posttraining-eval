@@ -215,7 +215,8 @@ checkpoints/
 outputs/
 
 # datasets & caches
-data/
+data/*
+!data/smoke_train.jsonl
 .cache/
 hf_cache/
 datasets/
