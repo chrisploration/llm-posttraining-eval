@@ -1,0 +1,14 @@
+data:
+  train_file: data/smoke_train.jsonl
+  max_seq_length: 256
+
+batching:
+  micro_batch_size: 1
+  grad_accum_steps: 1
+  gradient_checkpointing: false
+
+model:
+  load_in_4bit: false
+
+output:
+  output_dir: checkpoints/post_smoke_v1
