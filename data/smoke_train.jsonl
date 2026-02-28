@@ -1,10 +1,10 @@
-{"text":"User: What is 2+2?\nAssistant: 4"}
-{"text":"User: Say hello.\nAssistant: Hello."}
-{"text":"User: What is the capital of France?\nAssistant: Paris."}
-{"text":"User: Write one sentence about cats.\nAssistant: Cats are small domesticated mammals."}
-{"text":"User: What is 10-3?\nAssistant: 7"}
-{"text":"User: Give a short tip for studying.\nAssistant: Use spaced repetition."}
-{"text":"User: Define photosynthesis.\nAssistant: Photosynthesis converts light energy into chemical energy in plants."}
-{"text":"User: What is 5*6?\nAssistant: 30"}
-{"text":"User: Name a primary color.\nAssistant: Red."}
-{"text":"User: What is 9/3?\nAssistant: 3"}
+{"messages":[{"role":"user","content":"What is 2+2?"},{"role":"assistant","content":"4"}]}
+{"messages":[{"role":"user","content":"Say hello."},{"role":"assistant","content":"Hello."}]}
+{"messages":[{"role":"user","content":"What is the capital of France?"},{"role":"assistant","content":"Paris."}]}
+{"messages":[{"role":"user","content":"Write one sentence about cats."},{"role":"assistant","content":"Cats are small domesticated mammals."}]}
+{"messages":[{"role":"user","content":"What is 10-3?"},{"role":"assistant","content":"7"}]}
+{"messages":[{"role":"user","content":"Give a short tip for studying."},{"role":"assistant","content":"Use spaced repetition."}]}
+{"messages":[{"role":"user","content":"Define photosynthesis."},{"role":"assistant","content":"Photosynthesis converts light energy into chemical energy in plants."}]}
+{"messages":[{"role":"user","content":"What is 5*6?"},{"role":"assistant","content":"30"}]}
+{"messages":[{"role":"user","content":"Name a primary color."},{"role":"assistant","content":"Red."}]}
+{"messages":[{"role":"user","content":"What is 9/3?"},{"role":"assistant","content":"3"}]}
