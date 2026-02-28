@@ -1,6 +1,9 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Sequence
 
 import yaml
+
+
+from src.utils.config_utils import deep_merge, load_yaml_mapping
 
 class PostTrainConfig:
     def __init__(
@@ -100,9 +103,18 @@ def _get(d: dict, path: str):
         cur = cur[key]
     return cur
 
-def load_config(path: str) -> PostTrainConfig:
+def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) -> PostTrainConfig:
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
+
+    if not isinstance(raw, dict):
+        raise ValueError(f"Top-level config must be a mapping/dict: {path}")
+
+    if override_paths:
+        raw = dict(raw)
+        for opath in override_paths:
+            ov = load_yaml_mapping(opath)
+            deep_merge(raw, ov)
 
     model = _get(raw, "model")
     data = _get(raw, "data")
