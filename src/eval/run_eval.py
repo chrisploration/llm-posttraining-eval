@@ -25,6 +25,8 @@ from transformers import PreTrainedTokenizerBase, PreTrainedModel, AutoTokenizer
 # works correctly in unit tests and when executed via `python -m`.
 from src.train_artifacts import require_accelerate_if_needed
 
+from src.utils.config_utils import deep_merge, load_yaml_mapping
+
 
 class EvalConfig:
     def __init__(self, model_id, seed, generation, eval_cfg):
@@ -96,31 +98,6 @@ def _reject_sweeps(cfg_snapshot: Mapping[str, Any], *, allow_sweep: bool) -> Non
         )
 
 
-def _deep_merge(base: Dict[str, Any], override: Mapping[str, Any]) -> Dict[str, Any]:
-    if not isinstance(base, dict):
-        raise TypeError(f"_deep_merge base must be dict, got {type(base).__name__}")
-
-    for k, v in override.items():
-        if isinstance(v, Mapping) and isinstance(base.get(k), dict):
-            child = base.get(k)
-            if not isinstance(child, dict):
-                raise TypeError(
-                    f"_deep_merge expected dict at key '{k}', got {type(child).__name__}"
-                )
-            _deep_merge(child, v)
-        else:
-            base[k] = v
-    return base
-
-
-def _load_yaml_mapping(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
-        obj = yaml.safe_load(f)
-    if obj is None:
-        return {}
-    if not isinstance(obj, Mapping):
-        raise ValueError(f"Override YAML must be a mapping/dict at top-level: {path}")
-    return dict(obj)
 
 
 # Load and validate the evaluation configuration from a YAML file.
@@ -139,8 +116,8 @@ def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) ->
     if override_paths:
         raw = dict(raw)
         for opath in override_paths:
-            ov = _load_yaml_mapping(opath)
-            _deep_merge(raw, ov)
+            ov = load_yaml_mapping(opath)
+            deep_merge(raw, ov)
 
     model_id = _require(raw, "model", "id")
     eval_cfg = _require(raw, "eval")
