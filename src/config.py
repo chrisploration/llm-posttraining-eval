@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional, Sequence
+from typing import List, Dict, Any, Optional, Sequence, Tuple
 
 import yaml
 
@@ -103,7 +103,7 @@ def _get(d: dict, path: str):
         cur = cur[key]
     return cur
 
-def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) -> PostTrainConfig:
+def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) -> Tuple[PostTrainConfig, Dict[str, Any]]:
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
 
@@ -135,7 +135,7 @@ def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) ->
     if not lora_targets:
         raise ValueError("lora.target_modules must be a non-empty list")
 
-    return PostTrainConfig(
+    cfg = PostTrainConfig(
         seed=int(raw.get("seed", 0)),
         base_id=str(model["base_id"]),
         load_in_4bit=bool(model["load_in_4bit"]),
@@ -154,3 +154,5 @@ def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) ->
         lora_dropout=float(lora["dropout"]),
         lora_target_modules=lora_targets
     )
+
+    return cfg, raw
