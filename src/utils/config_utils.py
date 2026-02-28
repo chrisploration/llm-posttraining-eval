@@ -5,16 +5,16 @@ import yaml
 
 def deep_merge(base: Dict[str, Any], override: Mapping[str, Any]) -> Dict[str, Any]:
     if not isinstance(base, dict):
-        raise TypeError(f"_deep_merge base must be dict, got {type(base).__name__}")
+        raise TypeError(f"deep_merge base must be dict, got {type(base).__name__}")
 
     for k, v in override.items():
         if isinstance(v, Mapping) and isinstance(base.get(k), dict):
             child = base.get(k)
             if not isinstance(child, dict):
                 raise TypeError(
-                    f"_deep_merge expected dict at key '{k}', got {type(child).__name__}"
+                    f"deep_merge expected dict at key '{k}', got {type(child).__name__}"
                 )
-            _deep_merge(child, v)
+            deep_merge(child, v)
         else:
             base[k] = v
     return base
