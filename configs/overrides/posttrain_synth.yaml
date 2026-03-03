@@ -1,0 +1,2 @@
+data:
+  train_file: data/synthetic/train.jsonl
