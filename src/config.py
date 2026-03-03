@@ -103,18 +103,13 @@ def _get(d: dict, path: str):
         cur = cur[key]
     return cur
 
-def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) -> Tuple[PostTrainConfig, Dict[str, Any]]:
-    with open(path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f) or {}
 
+
+
+
+def load_config_from_dict(raw: Dict[str, Any]) -> PostTrainConfig:
     if not isinstance(raw, dict):
-        raise ValueError(f"Top-level config must be a mapping/dict: {path}")
-
-    if override_paths:
-        raw = dict(raw)
-        for opath in override_paths:
-            ov = load_yaml_mapping(opath)
-            deep_merge(raw, ov)
+        raise ValueError("Config must be a mapping/dict")
 
     model = _get(raw, "model")
     data = _get(raw, "data")
@@ -135,7 +130,7 @@ def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) ->
     if not lora_targets:
         raise ValueError("lora.target_modules must be a non-empty list")
 
-    cfg = PostTrainConfig(
+    return PostTrainConfig(
         seed=int(raw.get("seed", 0)),
         base_id=str(model["base_id"]),
         load_in_4bit=bool(model["load_in_4bit"]),
@@ -154,5 +149,24 @@ def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) ->
         lora_dropout=float(lora["dropout"]),
         lora_target_modules=lora_targets
     )
+
+
+
+
+
+def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) -> Tuple[PostTrainConfig, Dict[str, Any]]:
+    with open(path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+
+    if not isinstance(raw, dict):
+        raise ValueError(f"Top-level config must be a mapping/dict: {path}")
+
+    if override_paths:
+        raw = dict(raw)
+        for opath in override_paths:
+            ov = load_yaml_mapping(opath)
+            deep_merge(raw, ov)
+
+    cfg = load_config_from_dict(raw)
 
     return cfg, raw
