@@ -1,16 +1,17 @@
-from config import load_config, PostTrainConfig
+from src.config import load_config, PostTrainConfig, load_config_from_dict
 
 import torch
 import os
-import yaml
+import argparse
 
-from typing import Tuple
+from typing import Tuple, Sequence, Optional, Dict, Any
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, set_seed, TrainerCallback
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from datasets import load_dataset
 from trl import SFTTrainer
-from train_artifacts import guard_output_dir_empty, write_yaml, write_json, build_train_meta, append_jsonl, require_accelerate_if_needed
 
+from src.train_artifacts import guard_output_dir_empty, write_yaml, write_json, build_train_meta, append_jsonl, require_accelerate_if_needed
+from src.utils.config_utils import deep_merge
 
 
 
@@ -180,36 +181,75 @@ def run_training(
 
 
 
-def main():
-    config_path = "configs/posttrain.yaml"
+def run_training_entry(*, config_path: str, override_paths: Sequence[str], output_dir: Optional[str], seed: Optional[int]) -> None:
+    
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        raw_cfg = yaml.safe_load(f) or {}
+    cfg, cfg_snapshot_raw = load_config(config_path, override_paths=override_paths)
 
-    cfg = load_config(config_path)
+    cli_ov: Dict[str, Any] = {}
+    if output_dir is not None:
+        cli_ov.setdefault("output", {})["output_dir"] = output_dir
+    if seed is not None:
+        cli_ov["seed"] = int(seed)
+    if cli_ov:
+        cfg_snapshot_raw = dict(cfg_snapshot_raw)
+        deep_merge(cfg_snapshot_raw, cli_ov)
+        cfg = load_config_from_dict(cfg_snapshot_raw)
+
     set_seed(cfg.seed)
 
     guard_output_dir_empty(cfg.output_dir)
     os.makedirs(cfg.output_dir, exist_ok=True)
 
-    write_yaml(os.path.join(cfg.output_dir, "config_snapshot.yaml"), raw_cfg)
+    write_yaml(os.path.join(cfg.output_dir, "config_snapshot.yaml"), cfg_snapshot_raw)
 
-    resolved_view = dict(raw_cfg)
+    resolved_view = dict(cfg_snapshot_raw)
+    resolved_view["override_paths"] = list(override_paths)
     resolved_view["resolved"] = cfg.to_dict()
     write_yaml(os.path.join(cfg.output_dir, "config_resolved.yaml"), resolved_view)
 
-    # Post-training pipeline
     model, tokenizer = build_model(cfg)
     train_dataset = load_data(cfg, tokenizer)
 
     meta = build_train_meta(
         output_dir=cfg.output_dir,
-        cfg_dict=raw_cfg,
-        dataset_size_used=len(train_dataset)
+        cfg_dict=cfg_snapshot_raw,
+        dataset_size_used=len(train_dataset),
+        config_path=config_path,
+        override_paths=override_paths
     )
     write_json(os.path.join(cfg.output_dir, "meta.json"), meta)
 
     run_training(cfg, model, tokenizer, train_dataset)
+
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Run post-training from a YAML config.")
+    ap.add_argument("--config",
+                    default="configs/posttrain.yaml",
+                    help="Path to post-training YAML."
+                    )
+    ap.add_argument("--override",
+                    action="append",
+                    default=[],
+                    help="Override YAML (repeatable). Applied in order."
+                    )
+    ap.add_argument("--output_dir",
+                    default=None,
+                    help="Override output.output_dir from config.")
+    ap.add_argument("--seed",
+                    type=int,
+                    default=None,
+                    help="Override seed from config.")
+    args = ap.parse_args()
+
+    run_training_entry(
+        config_path=args.config,
+        override_paths=args.override,
+        output_dir=args.output_dir,
+        seed=args.seed
+    )
 
 
 
