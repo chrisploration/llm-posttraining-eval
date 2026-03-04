@@ -3,7 +3,7 @@ import json
 import random
 import argparse
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 DEFAULT_OUT_PATH = os.path.join("data", "synthetic", "train.jsonl")
 
@@ -26,7 +26,7 @@ def _write_jsonl(path: str, rows: List[Dict[str, Any]], *, force: bool) -> None:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
-def _mk_example(user: str, assistant: str) -> Dict[str, Any]:
+def _mk_example(user: str, assistant: Optional[str]) -> Dict[str, Any]:
     return {
         "messages": [
             {"role": "user", "content": user},
@@ -66,7 +66,7 @@ def generate_examples(n: int, rng: random.Random) -> List[Dict[str, Any]]:
             elif op == "*":
                 ans = str(a * b)
             else:
-                ans = "0"
+                raise ValueError(f"Unknown operator: {op}")
             ex["messages"][1]["content"] = ans
 
         rows.append(ex)
@@ -76,14 +76,25 @@ def generate_examples(n: int, rng: random.Random) -> List[Dict[str, Any]]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Generate synthetic chat JSONL for post-training.")
-    ap.add_argument("--num_examples", type=int, default=200, help="Number of JSONL lines to generate.")
-    ap.add_argument("--seed", type=int, default=42, help="RNG seed for deterministic generation.")
+    ap.add_argument("--num_examples",
+                    type=int,
+                    default=200,
+                    help="Number of JSONL lines to generate."
+    )
+    ap.add_argument("--seed",
+                    type=int,
+                    default=42,
+                    help="RNG seed for deterministic generation."
+    )
     ap.add_argument(
         "--out",
         default=DEFAULT_OUT_PATH,
-        help=f"Output JSONL path. Default: {DEFAULT_OUT_PATH}",
+        help=f"Output JSONL path. Default: {DEFAULT_OUT_PATH}"
     )
-    ap.add_argument("--force", action="store_true", help="Overwrite output file if it exists.")
+    ap.add_argument("--force",
+                    action="store_true",
+                    help="Overwrite output file if it exists."
+    )
     args = ap.parse_args()
 
     rng = random.Random(int(args.seed))
