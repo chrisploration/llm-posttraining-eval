@@ -828,10 +828,10 @@ def main() -> None:
         help="Path to the evaluation configuration file (YAML)."
         )
     ap.add_argument(
-    "--override",
-    action="append",
-    default=[],
-    help="Path to an override YAML file. Can be repeated; applied in order."
+        "--override",
+        action="append",
+        default=[],
+        help="Path to an override YAML file. Can be repeated; applied in order."
     )
     ap.add_argument(
         "--mode",
@@ -845,9 +845,9 @@ def main() -> None:
         help="Allow list-valued (sweep-shaped) configs. Default: false (single-run only)."
         )
     ap.add_argument(
-    "--strict_determinism",
-    action="store_true",
-    help="Enable torch/cuDNN/CUBLAS deterministic settings (slower; may raise on nondet ops)."
+        "--strict_determinism",
+        action="store_true",
+        help="Enable torch/cuDNN/CUBLAS deterministic settings (slower; may raise on nondet ops)."
         )
     ap.add_argument(
         "--checkpoint",
@@ -855,9 +855,9 @@ def main() -> None:
         help="Optional model checkpoint/path to evaluate (overrides model.id for loading; stored in meta.json)."
         )
     ap.add_argument(
-    "--base_model",
-    default=None,
-    help="Base model id/path to use when --checkpoint points to a PEFT adapter directory."
+        "--base_model",
+        default=None,
+        help="Base model id/path to use when --checkpoint points to a PEFT adapter directory."
     )
     ap.add_argument(
         "--output_dir",
