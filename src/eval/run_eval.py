@@ -9,7 +9,6 @@ import yaml
 import re
 import json
 import argparse
-import subprocess
 import sys
 import transformers
 import platform
@@ -17,13 +16,13 @@ import socket
 import copy
 
 from datetime import datetime, timezone
-from typing import Callable, Dict, Sequence, Mapping, List, Any, Optional, Tuple, Iterable
+from typing import Callable, Dict, Sequence, Mapping, List, Any, Optional, Tuple
 
 from transformers import PreTrainedTokenizerBase, PreTrainedModel, AutoTokenizer, AutoModelForCausalLM
 
 # Absolute import from the src package so that `import src.eval.run_eval`
 # works correctly in unit tests and when executed via `python -m`.
-from src.train_artifacts import require_accelerate_if_needed
+from src.train_artifacts import require_accelerate_if_needed, _git_sha, guard_output_dir_empty, write_json, write_jsonl, write_yaml
 
 from src.utils.config_utils import deep_merge, load_yaml_mapping
 
@@ -544,11 +543,6 @@ def _validate_deterministic_generation(gen: Mapping[str, Any], *, where: str = "
         raise ValueError(f"{where}: non-deterministic generation fields: {bad}. generation={g}")
 
 
-def _git_sha() -> Optional[str]:
-    try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    except Exception:
-        return None
 
 
 def _gpu_info() -> Dict[str, Any]:
@@ -587,19 +581,6 @@ def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, 
     }
 
 
-def _guard_output_dir(output_dir: str) -> None:
-    if not os.path.exists(output_dir):
-        return
-    
-    leftovers = os.listdir(output_dir)
-    if not leftovers:
-        return
-
-    raise FileExistsError(
-        f"Refusing to use non-empty output_dir: {output_dir}. "
-        "Choose a fresh --output_dir or delete its contents."
-    )
-
 
 def _is_peft_adapter_dir(path: Optional[str]) -> bool:
     if not path:
@@ -612,44 +593,12 @@ def _is_peft_adapter_dir(path: Optional[str]) -> bool:
 def _write_run_artifacts(output_dir: str, cfg_snapshot: Mapping[str, Any], cfg_resolved: Mapping[str, Any], meta: Mapping[str, Any]) -> None:
     os.makedirs(output_dir, exist_ok=True)
 
-    snap_path = os.path.join(output_dir, "config_snapshot.yaml")
-    snap_text = yaml.safe_dump(cfg_snapshot, sort_keys=False)
-    with open(snap_path, "w", encoding="utf-8") as f:
-        f.write(snap_text)
-        if not snap_text.endswith("\n"):
-            f.write("\n")
+    write_yaml(os.path.join(output_dir, "config_snapshot.yaml"), cfg_snapshot)
 
-    resolved_path = os.path.join(output_dir, "config_resolved.yaml")
-    resolved_text = yaml.safe_dump(cfg_resolved, sort_keys=False)
-    with open(resolved_path, "w", encoding="utf-8") as f:
-        f.write(resolved_text)
-        if not resolved_text.endswith("\n"):
-            f.write("\n")
+    write_yaml(os.path.join(output_dir, "config_resolved.yaml"), cfg_resolved)
 
-    meta_path = os.path.join(output_dir, "meta.json")
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2, sort_keys=True, ensure_ascii=False)
-        f.write("\n")
+    write_json(os.path.join(output_dir, "meta.json"), meta)
 
-
-def _write_json(path: str, obj: Mapping[str, Any]) -> None:
-    dirpath = os.path.dirname(path)
-    if dirpath:
-        os.makedirs(dirpath, exist_ok=True)
-
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(obj, f, indent=2, sort_keys=True, ensure_ascii=False)
-        f.write("\n")
-
-
-def _write_jsonl(path: str, rows: Iterable[Mapping[str, Any]]) -> None:
-    dirpath = os.path.dirname(path)
-    if dirpath:
-        os.makedirs(dirpath, exist_ok=True)
-
-    with open(path, "w", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
 def _is_failure(sample: Dict[str, Any]) -> bool:
@@ -725,7 +674,7 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
     _set_seeds(cfg.seed)
     rng = random.Random(cfg.seed)
 
-    _guard_output_dir(output_dir)
+    guard_output_dir_empty(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     out_path = os.path.join(output_dir, "results.json")
@@ -850,15 +799,15 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
         raise RuntimeError(f"Runner did not produce metrics for: {missing}")
         
     metrics_path = os.path.join(output_dir, "metrics.json")
-    _write_json(metrics_path, results["metrics"])
+    write_json(metrics_path, results["metrics"])
 
     rep = _select_representative_samples(all_samples, per_task=5, max_total=200)
     samples_path = os.path.join(output_dir, "samples.jsonl")
-    _write_jsonl(samples_path, rep)
+    write_jsonl(samples_path, rep)
 
     fail_rows = _bucket_failures(all_samples, task_bucket)
     failures_path = os.path.join(output_dir, "failures.jsonl")
-    _write_jsonl(failures_path, fail_rows)
+    write_jsonl(failures_path, fail_rows)
 
 
     with open(out_path, "w", encoding="utf-8") as f:

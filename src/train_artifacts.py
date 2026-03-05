@@ -8,7 +8,7 @@ import sys
 import platform
 import transformers
 
-from typing import Optional, Mapping, Any, Sequence, Dict
+from typing import Optional, Mapping, Any, Sequence, Dict, Iterable
 from datetime import datetime, timezone
 
 
@@ -72,6 +72,16 @@ def append_jsonl(path: str, row: Mapping[str, Any]) -> None:
 
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(dict(row), ensure_ascii=False) + "\n")
+
+
+def write_jsonl(path: str, rows: Iterable[Mapping[str, Any]]) -> None:
+    dirpath = os.path.dirname(path)
+    if dirpath:
+        os.makedirs(dirpath, exist_ok=True)
+
+    with open(path, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(dict(r), ensure_ascii=False) + "\n")
 
 
 def build_train_meta(*, output_dir: str, cfg_dict: Mapping[str, Any], dataset_size_used: int, config_path: Optional[str] = None, override_paths: Optional[Sequence[str]] = None) -> Dict[str, Any]:
