@@ -155,7 +155,7 @@ def run_training(
         warmup_ratio=cfg.warmup_ratio,
         max_grad_norm=cfg.max_grad_norm,
         logging_steps=50,
-        save_strategy="epoch",
+        save_strategy="no",
         remove_unused_columns=False,
         fp16=torch.cuda.is_available(),
         report_to=[]
