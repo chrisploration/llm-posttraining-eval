@@ -28,7 +28,9 @@ from src.utils.config_utils import deep_merge, load_yaml_mapping
 
 
 class EvalConfig:
-    def __init__(self, model_id, seed, generation, eval_cfg):
+    def __init__(self, *, model_id: str, seed: int, generation: Dict[str, Any], eval_cfg: Dict[str, Any]) -> None:
+        if not model_id:
+            raise ValueError("model.id must be non-empty")
         self.model_id = model_id
         self.seed = seed
         self.generation = generation
@@ -133,10 +135,10 @@ def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) ->
     _validate_deterministic_generation(raw.get("generation", {}), where="eval")
     
     cfg = EvalConfig(
-        model_id = str(model_id),
-        seed = int(raw.get("seed",0)),
-        generation = dict(raw.get("generation", {})),
-        eval_cfg = dict(eval_cfg)
+        model_id=str(model_id),
+        seed=int(raw.get("seed",0)),
+        generation=dict(raw.get("generation", {})),
+        eval_cfg=dict(eval_cfg)
     )
     return cfg, raw
 
