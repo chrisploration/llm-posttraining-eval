@@ -9,6 +9,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments,
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from datasets import load_dataset
 from trl import SFTTrainer
+from datasets import Dataset
 
 from src.train_artifacts import guard_output_dir_empty, write_yaml, write_json, build_train_meta, append_jsonl, require_accelerate_if_needed
 from src.utils.config_utils import deep_merge
@@ -75,7 +76,7 @@ def build_model(cfg: PostTrainConfig) -> Tuple[torch.nn.Module, AutoTokenizer]:
     return model, tokenizer
 
 
-def load_data(cfg: PostTrainConfig, tokenizer: AutoTokenizer):
+def load_data(cfg: PostTrainConfig, tokenizer: AutoTokenizer) -> Dataset:
     if not os.path.exists(cfg.train_file):
         raise FileNotFoundError(f"Training file not found: {cfg.train_file}")
 
@@ -138,7 +139,7 @@ def run_training(
     cfg: PostTrainConfig,
     model: torch.nn.Module,
     tokenizer: AutoTokenizer,
-    train_dataset
+    train_dataset: Dataset
 ) -> None:
     
     os.makedirs(cfg.output_dir, exist_ok=True)
