@@ -213,6 +213,19 @@ def run_training_entry(*, config_path: str, override_paths: Sequence[str], outpu
     write_yaml(os.path.join(cfg.output_dir, "config_resolved.yaml"), resolved_view)
 
     model, tokenizer = build_model(cfg)
+
+    if torch.cuda.is_available():
+        free_bytes, total_bytes = torch.cuda.mem_get_info()
+        free_mem_gb = free_bytes / 1e9
+        total_mem_gb = total_bytes / 1e9
+
+        print(f"GPU memory available after model load: {free_mem_gb:.1f}GB free / {total_mem_gb:.1f}GB total")
+
+        if free_mem_gb < 2.0:
+            raise RuntimeError(
+                f"Only {free_mem_gb:.1f}GB free GPU memory after model load. Need at least 2.0GB."
+            )
+
     train_dataset = load_data(cfg, tokenizer)
 
     meta = build_train_meta(
