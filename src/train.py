@@ -139,7 +139,8 @@ def run_training(
     cfg: PostTrainConfig,
     model: torch.nn.Module,
     tokenizer: AutoTokenizer,
-    train_dataset: Dataset
+    train_dataset: Dataset,
+    resume_from: Optional[str]
 ) -> None:
     
     os.makedirs(cfg.output_dir, exist_ok=True)
@@ -172,7 +173,7 @@ def run_training(
         callbacks=[JsonlLoggerCallback(log_path)]
     )
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint=resume_from)
 
     # Save adapter weights (not full base model) + tokenizer.
     trainer.model.save_pretrained(cfg.output_dir)
@@ -182,7 +183,7 @@ def run_training(
 
 
 
-def run_training_entry(*, config_path: str, override_paths: Sequence[str], output_dir: Optional[str], seed: Optional[int]) -> None:
+def run_training_entry(*, config_path: str, override_paths: Sequence[str], output_dir: Optional[str], seed: Optional[int], resume_from: Optional[str]) -> None:
     
 
     cfg, cfg_snapshot_raw = load_config(config_path, override_paths=override_paths)
@@ -194,12 +195,13 @@ def run_training_entry(*, config_path: str, override_paths: Sequence[str], outpu
         cli_ov["seed"] = int(seed)
     if cli_ov:
         cfg_snapshot_raw = dict(cfg_snapshot_raw)
-        deep_merge(cfg_snapshot_raw, cli_ov)
+        cfg_snapshot_raw = deep_merge(cfg_snapshot_raw, cli_ov)
         cfg = load_config_from_dict(cfg_snapshot_raw)
 
     set_seed(cfg.seed)
 
-    guard_output_dir_empty(cfg.output_dir)
+    if resume_from is None:
+        guard_output_dir_empty(cfg.output_dir)
     os.makedirs(cfg.output_dir, exist_ok=True)
 
     write_yaml(os.path.join(cfg.output_dir, "config_snapshot.yaml"), cfg_snapshot_raw)
@@ -221,11 +223,11 @@ def run_training_entry(*, config_path: str, override_paths: Sequence[str], outpu
     )
     write_json(os.path.join(cfg.output_dir, "meta.json"), meta)
 
-    run_training(cfg, model, tokenizer, train_dataset)
+    run_training(cfg, model, tokenizer, train_dataset, resume_from)
 
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser(description="Run post-training from a YAML config.")
     ap.add_argument("--config",
                     default="configs/posttrain.yaml",
@@ -243,13 +245,17 @@ def main():
                     type=int,
                     default=None,
                     help="Override seed from config.")
+    ap.add_argument("--resume",
+                    default=None,
+                    help="Path to a HF Trainer checkpoint dir to resume from.")
     args = ap.parse_args()
 
     run_training_entry(
         config_path=args.config,
         override_paths=args.override,
         output_dir=args.output_dir,
-        seed=args.seed
+        seed=args.seed,
+        resume_from=args.resume
     )
 
 
