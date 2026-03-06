@@ -16,7 +16,7 @@ import socket
 import copy
 
 from datetime import datetime, timezone
-from typing import Callable, Dict, Sequence, Mapping, List, Any, Optional, Tuple
+from typing import Callable, Dict, Sequence, Mapping, List, Any, Optional, Tuple, Union
 
 from transformers import PreTrainedTokenizerBase, PreTrainedModel, AutoTokenizer, AutoModelForCausalLM
 
@@ -118,7 +118,7 @@ def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) ->
         raw = dict(raw)
         for opath in override_paths:
             ov = load_yaml_mapping(opath)
-            deep_merge(raw, ov)
+            raw = deep_merge(raw, ov)
 
     model_id = _require(raw, "model", "id")
     eval_cfg = _require(raw, "eval")
@@ -603,7 +603,7 @@ def _write_run_artifacts(output_dir: str, cfg_snapshot: Mapping[str, Any], cfg_r
 
 
 
-def _is_failure(sample: Dict[str, Any]) -> bool:
+def _is_failure(sample: Mapping[str, Any]) -> bool:
     fr = sample.get("failure_reason")
     if fr:
         return True
@@ -619,7 +619,7 @@ def _is_failure(sample: Dict[str, Any]) -> bool:
     raise ValueError(f"Unknown task in sample: {task}")
 
 
-def _select_representative_samples(all_samples: List[Dict[str, Any]], *, per_task: int = 5, max_total: int = 200) -> List[Dict[str, Any]]:
+def _select_representative_samples(all_samples: Sequence[Mapping[str, Any]], *, per_task: int = 5, max_total: int = 200) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     seen_per_task: Dict[str, int] = {}
     for s in all_samples:
@@ -627,13 +627,13 @@ def _select_representative_samples(all_samples: List[Dict[str, Any]], *, per_tas
         k = seen_per_task.get(t, 0)
         if k >= per_task:
             continue
-        out.append(s)
+        out.append(dict(s))
         seen_per_task[t] = k + 1
         if len(out) >= max_total:
             break
     return out
 
-def _bucket_failures(all_samples: List[Dict[str, Any]], task_bucket_fn) -> List[Dict[str, Any]]:
+def _bucket_failures(all_samples: Sequence[Mapping[str, Any]], task_bucket_fn: Callable[[str], str]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for s in all_samples:
         if not _is_failure(s):
@@ -651,6 +651,100 @@ def _bucket_failures(all_samples: List[Dict[str, Any]], task_bucket_fn) -> List[
         })
     return rows
 
+
+def _ensure_pad_token(tokenizer: PreTrainedTokenizerBase) -> None:
+    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+
+def _load_eval_model(checkpoint: str, base_model_id: str, torch_dtype: torch.dtype, device_map: Optional[Union[str, Mapping[str, int]]],) -> Tuple[PreTrainedModel, PreTrainedTokenizerBase]:
+    if _is_peft_adapter_dir(checkpoint):
+        try:
+            from peft import PeftModel
+        except ImportError as e:
+            raise ImportError(
+                "PEFT is required to evaluate adapter checkpoints. Install with: pip install peft"
+            ) from e
+
+        tokenizer = AutoTokenizer.from_pretrained(base_model_id, use_fast=True)
+        _ensure_pad_token(tokenizer)
+
+        base = AutoModelForCausalLM.from_pretrained(
+            base_model_id,
+            torch_dtype=torch_dtype,
+            device_map=device_map
+        )
+        model = PeftModel.from_pretrained(base, checkpoint)
+        return model, tokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint, use_fast=True)
+    _ensure_pad_token(tokenizer)
+
+    model = AutoModelForCausalLM.from_pretrained(
+        checkpoint,
+        torch_dtype=torch_dtype,
+        device_map=device_map
+    )
+    return model, tokenizer
+
+
+def _execute_tasks(tasks: Sequence[str], counts: Mapping[str, int], rng: random.Random, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, gen_params: Mapping[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]]:
+    PREVIEW_N = 10
+
+    metrics_by_task: Dict[str, Any] = {}
+    samples_preview_by_task: Dict[str, Any] = {}
+    all_samples: List[Dict[str, Any]] = []
+
+    available_tasks = sorted(TASK_REGISTRY.keys())
+
+    for task in tasks:
+        if task not in TASK_REGISTRY:
+            raise KeyError(f"Unknown task '{task}'. Available: {available_tasks}")
+
+        if task not in counts:
+            raise KeyError(f"Missing count for task '{task}'. Provide eval.counts.{task} in the config.")
+
+        n = int(counts[task])
+        fn = TASK_REGISTRY[task]
+
+        metrics, samples = fn(
+            n=n,
+            rng=rng,
+            model=model,
+            tokenizer=tokenizer,
+            gen_params=gen_params
+        )
+        metrics_by_task[task] = metrics
+        samples_preview_by_task[task] = samples[:PREVIEW_N]
+        all_samples.extend(samples)
+
+    return metrics_by_task, samples_preview_by_task, all_samples
+
+
+def _write_eval_results(output_dir: str, results: Mapping[str, Any], all_samples: Sequence[Mapping[str, Any]]) -> str:
+    os.makedirs(output_dir, exist_ok=True)
+
+    SAMPLES_PER_TASK = 5
+    MAX_SAMPLES_TOTAL = 200
+
+    metrics_path = os.path.join(output_dir, "metrics.json")
+    write_json(metrics_path, results["metrics"])
+
+    rep = _select_representative_samples(
+        all_samples,
+        per_task=SAMPLES_PER_TASK,
+        max_total=MAX_SAMPLES_TOTAL
+    )
+    samples_path = os.path.join(output_dir, "samples.jsonl")
+    write_jsonl(samples_path, rep)
+
+    fail_rows = _bucket_failures(all_samples, task_bucket)
+    failures_path = os.path.join(output_dir, "failures.jsonl")
+    write_jsonl(failures_path, fail_rows)
+
+    out_path = os.path.join(output_dir, "results.json")
+    write_json(out_path, results)
+    return out_path
 
 
 # Execute the full evaluation pipeline defined by the config, including data generation, model inference, scoring, and aggregation, and write results to a single JSON file.
@@ -679,43 +773,12 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
     guard_output_dir_empty(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
-    out_path = os.path.join(output_dir, "results.json")
-    
-
     device_map = "auto" if torch.cuda.is_available() else None
     require_accelerate_if_needed(device_map)
 
     torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
-    if _is_peft_adapter_dir(checkpoint):
-        try:
-            from peft import PeftModel
-        except Exception as e:
-            raise ImportError(
-                "PEFT is required to evaluate adapter checkpoints. Install with: pip install peft"
-            ) from e
-
-        tokenizer = AutoTokenizer.from_pretrained(base_model_id, use_fast=True)
-        if tokenizer.pad_token is None and tokenizer.eos_token is not None:
-            tokenizer.pad_token = tokenizer.eos_token
-
-        base = AutoModelForCausalLM.from_pretrained(
-            base_model_id,
-            torch_dtype=torch_dtype,
-            device_map=device_map,
-        )
-        model = PeftModel.from_pretrained(base, checkpoint)
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(checkpoint, use_fast=True)
-        if tokenizer.pad_token is None and tokenizer.eos_token is not None:
-            tokenizer.pad_token = tokenizer.eos_token
-
-        model = AutoModelForCausalLM.from_pretrained(
-            checkpoint,
-            torch_dtype=torch_dtype,
-            device_map=device_map,
-        )
-
+    model, tokenizer = _load_eval_model(checkpoint=checkpoint, base_model_id=base_model_id, torch_dtype=torch_dtype, device_map=device_map)
 
     gen_params = _resolve_generation_params(cfg.generation, tokenizer=tokenizer)
 
@@ -786,35 +849,23 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
         "samples": {}
     }
 
-    all_samples: List[Dict[str, Any]] = []
-
-    for task in tasks:
-        n = int(counts.get(task, 0))
-        fn = TASK_REGISTRY[task]
-        metrics, samples = fn(n=n, rng=rng, model=model, tokenizer=tokenizer, gen_params=gen_params)
-        results["metrics"][task] = metrics
-        results["samples"][task] = samples[:10]
-        all_samples.extend(samples)
+    metrics_by_task, samples_preview_by_task, all_samples = _execute_tasks(
+        tasks=tasks,
+        counts=counts,
+        rng=rng,
+        model=model,
+        tokenizer=tokenizer,
+        gen_params=gen_params
+    )
+    
+    results["metrics"] = metrics_by_task
+    results["samples"] = samples_preview_by_task
 
     missing = sorted(set(tasks) - set(results["metrics"].keys()))
     if missing:
         raise RuntimeError(f"Runner did not produce metrics for: {missing}")
         
-    metrics_path = os.path.join(output_dir, "metrics.json")
-    write_json(metrics_path, results["metrics"])
-
-    rep = _select_representative_samples(all_samples, per_task=5, max_total=200)
-    samples_path = os.path.join(output_dir, "samples.jsonl")
-    write_jsonl(samples_path, rep)
-
-    fail_rows = _bucket_failures(all_samples, task_bucket)
-    failures_path = os.path.join(output_dir, "failures.jsonl")
-    write_jsonl(failures_path, fail_rows)
-
-
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2, sort_keys=True, ensure_ascii=False)
-        f.write("\n")
+    out_path = _write_eval_results(output_dir, results, all_samples)
 
     return out_path
 
