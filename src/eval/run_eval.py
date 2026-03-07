@@ -310,6 +310,24 @@ def generate_text(
     return tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
 
+def generate_text_batch(model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, prompts: List[str], gen_params: Mapping[str, Any]) -> List[str]:
+    texts = [_format_prompt(tokenizer, p) for p in prompts]
+    inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=True)
+    inputs = {k: v.to(model.device) for k, v in inputs.items()}
+
+    with torch.no_grad():
+        output_ids = model.generate(**inputs, **gen_params)
+
+    results: List[str] = []
+    prompt_len = inputs["input_ids"].shape[1]
+
+    for i in range(len(prompts)):
+        gen_ids = output_ids[i, prompt_len:]
+        results.append(tokenizer.decode(gen_ids, skip_special_tokens=True).strip())
+
+    return results
+
+
 # Score a model response by extracting the final integer in the output and comparing it against the expected answer (simple v1 heuristic).
 def score_arithmetic(answer: str, output: str) -> Tuple[int, str]:
     matches = _INT_RE.findall(output)
@@ -358,72 +376,87 @@ def mean(xs: Sequence[int]) -> Optional[float]:
 
 
 
-def run_basic_capability(*, n: int, rng: random.Random, model, tokenizer, gen_params: Mapping[str, Any]) -> Tuple[dict, List[Dict[str, Any]]]:
+def run_basic_capability(*, n: int, rng: random.Random, model, tokenizer, gen_params: Mapping[str, Any], batch_size: int) -> Tuple[dict, List[Dict[str, Any]]]:
     items = make_capability_items(n, rng)
     correct: List[int] = []
     samples: List[Dict[str, Any]] = []
 
-    for it in items:
-        out = generate_text(model, tokenizer, it["prompt"], gen_params)
-        ok, pred = score_arithmetic(it["answer"], out)
-        correct.append(ok)
-        samples.append(
-            {
-                "task": "basic_capability",
-                "id": it["id"],
-                "prompt": it["prompt"],
-                "expected": it["answer"],
-                "prediction": pred,
-                "score": ok,
-                "failure_reason": None if ok == 1 else "wrong_answer",
-                "answer": it["answer"],
-                "pred": pred,
-                "output": out,
-                "is_correct": bool(ok)
-            }
-        )
+    for start in range(0, len(items), batch_size):
+        batch = items[start:start + batch_size]
+        prompts = [it["prompt"] for it in batch]
+        outputs = generate_text_batch(model, tokenizer, prompts, gen_params)
+
+        for it, out in zip(batch, outputs):
+            ok, pred = score_arithmetic(it["answer"], out)
+            correct.append(ok)
+            samples.append(
+                {
+                    "task": "basic_capability",
+                    "id": it["id"],
+                    "prompt": it["prompt"],
+                    "expected": it["answer"],
+                    "prediction": pred,
+                    "score": ok,
+                    "failure_reason": None if ok == 1 else "wrong_answer",
+                    "answer": it["answer"],
+                    "pred": pred,
+                    "output": out,
+                    "is_correct": bool(ok)
+                }
+            )
 
     metrics = {"accuracy": {"mean": mean(correct), "n": len(correct)}}
     return metrics, samples
 
 
-def run_robustness(*, n: int, rng: random.Random, model, tokenizer, gen_params: Mapping[str, Any]) -> Tuple[dict, List[Dict[str, Any]]]:
+def run_robustness(*, n: int, rng: random.Random, model, tokenizer, gen_params: Mapping[str, Any], batch_size: int) -> Tuple[dict, List[Dict[str, Any]]]:
     items = make_robustness_items(n, rng)
     base_correct: List[int] = []
     pert_correct: List[int] = []
     samples: List[Dict[str, Any]] = []
 
-    for it in items:
-        out_base = generate_text(model, tokenizer, it["prompt_original"], gen_params)
-        ok_base, pred_base = score_arithmetic(it["answer"], out_base)
-        base_correct.append(ok_base)
+    for start in range(0, len(items), batch_size):
+        batch = items[start:start + batch_size]
 
-        out_pert = generate_text(model, tokenizer, it["prompt"], gen_params)
-        ok_pert, pred_pert = score_arithmetic(it["answer"], out_pert)
-        pert_correct.append(ok_pert)
+        base_prompts = [it["prompt_original"] for it in batch]
+        pert_prompts = [it["prompt"] for it in batch]
 
-        # Define a single canonical "prediction" for failure analysis.
-        robust_ok = 1 if (pred_pert == it["answer"]) else 0
+        base_outputs = generate_text_batch(model, tokenizer, base_prompts, gen_params)
+        pert_outputs = generate_text_batch(model, tokenizer, pert_prompts, gen_params)
 
-        samples.append(
-            {
-                "task": "robustness",
-                "id": it["id"],
-                "expected": it["answer"],
-                "prediction": pred_pert,
-                "score": robust_ok,
-                "failure_reason": None if robust_ok == 1 else "wrong_answer_perturbed",
-                "prompt_original": it["prompt_original"],
-                "prompt_perturbed": it["prompt"],
-                "answer": it["answer"],
-                "pred_base": pred_base,
-                "pred_pert": pred_pert,
-                "output_base": out_base,
-                "output_pert": out_pert,
-                "is_correct_base": bool(ok_base),
-                "is_correct_pert": bool(ok_pert)
-            }
-        )
+
+
+
+        for it, out_base, out_pert  in zip(batch, base_outputs, pert_outputs):
+            
+            ok_base, pred_base = score_arithmetic(it["answer"], out_base)
+            base_correct.append(ok_base)
+
+            ok_pert, pred_pert = score_arithmetic(it["answer"], out_pert)
+            pert_correct.append(ok_pert)
+
+            # Define a single canonical "prediction" for failure analysis.
+            robust_ok = 1 if (pred_pert == it["answer"]) else 0
+
+            samples.append(
+                {
+                    "task": "robustness",
+                    "id": it["id"],
+                    "expected": it["answer"],
+                    "prediction": pred_pert,
+                    "score": robust_ok,
+                    "failure_reason": None if robust_ok == 1 else "wrong_answer_perturbed",
+                    "prompt_original": it["prompt_original"],
+                    "prompt_perturbed": it["prompt"],
+                    "answer": it["answer"],
+                    "pred_base": pred_base,
+                    "pred_pert": pred_pert,
+                    "output_base": out_base,
+                    "output_pert": out_pert,
+                    "is_correct_base": bool(ok_base),
+                    "is_correct_pert": bool(ok_pert)
+                }
+            )
 
     base_acc = mean(base_correct)
     pert_acc = mean(pert_correct)
@@ -437,45 +470,49 @@ def run_robustness(*, n: int, rng: random.Random, model, tokenizer, gen_params: 
     return metrics, samples
 
 
-def run_safety(*, n: int, rng: random.Random, model, tokenizer, gen_params: Mapping[str, Any]) -> Tuple[dict, List[Dict[str, Any]]]:
+def run_safety(*, n: int, rng: random.Random, model, tokenizer, gen_params: Mapping[str, Any], batch_size: int) -> Tuple[dict, List[Dict[str, Any]]]:
     items = make_safety_items(n, rng)
     counts_by_label = {"refuse_correct": 0, "unsafe_comply": 0, "over_refuse": 0, "ok_comply": 0}
     samples: List[Dict[str, Any]] = []
 
-    for it in items:
-        out = generate_text(model, tokenizer, it["prompt"], gen_params)
-        label = score_safety(bool(it["should_refuse"]), out)
-        counts_by_label[label] += 1
-        
+    for start in range(0, len(items), batch_size):
+        batch = items[start:start + batch_size]
+        prompts = [it["prompt"] for it in batch]
+        outputs = generate_text_batch(model, tokenizer, prompts, gen_params)
 
-        expected = "refuse" if bool(it["should_refuse"]) else "comply"
-        failure_reason = None
+        for it, out in zip(batch, outputs):
+            label = score_safety(bool(it["should_refuse"]), out)
+            counts_by_label[label] += 1
+            
 
-        if label == "unsafe_comply":
-            failure_reason = "unsafe_compliance"
-        elif label == "over_refuse":
-            failure_reason = "over_refusal"
+            expected = "refuse" if bool(it["should_refuse"]) else "comply"
+            failure_reason = None
+
+            if label == "unsafe_comply":
+                failure_reason = "unsafe_compliance"
+            elif label == "over_refuse":
+                failure_reason = "over_refusal"
 
 
-        if label in ("refuse_correct", "ok_comply"):
-            score = 1
-        else:
-            score = 0
+            if label in ("refuse_correct", "ok_comply"):
+                score = 1
+            else:
+                score = 0
 
-        samples.append(
-            {
-                "task": "safety",
-                "id": it["id"],
-                "prompt": it["prompt"],
-                "expected": expected,
-                "prediction": label,
-                "score": score,
-                "failure_reason": failure_reason,
-                "should_refuse": bool(it["should_refuse"]),
-                "label": label,
-                "output": out
-            }
-        )
+            samples.append(
+                {
+                    "task": "safety",
+                    "id": it["id"],
+                    "prompt": it["prompt"],
+                    "expected": expected,
+                    "prediction": label,
+                    "score": score,
+                    "failure_reason": failure_reason,
+                    "should_refuse": bool(it["should_refuse"]),
+                    "label": label,
+                    "output": out
+                }
+            )
 
     denom = max(1, sum(counts_by_label.values()))
     rates = {k: v / denom for k, v in counts_by_label.items()}
@@ -660,6 +697,8 @@ def _bucket_failures(all_samples: Sequence[Mapping[str, Any]], task_bucket_fn: C
 def _ensure_pad_token(tokenizer: PreTrainedTokenizerBase) -> None:
     if tokenizer.pad_token is None and tokenizer.eos_token is not None:
         tokenizer.pad_token = tokenizer.eos_token
+    # left padding side required for batched generation with decoder-only models
+    tokenizer.padding_side = "left"
 
 
 def _load_eval_model(checkpoint: str, base_model_id: str, torch_dtype: torch.dtype, device_map: Optional[Union[str, Mapping[str, int]]],) -> Tuple[PreTrainedModel, PreTrainedTokenizerBase]:
@@ -693,7 +732,7 @@ def _load_eval_model(checkpoint: str, base_model_id: str, torch_dtype: torch.dty
     return model, tokenizer
 
 
-def _execute_tasks(tasks: Sequence[str], counts: Mapping[str, int], rng: random.Random, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, gen_params: Mapping[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]]:
+def _execute_tasks(tasks: Sequence[str], counts: Mapping[str, int], rng: random.Random, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, gen_params: Mapping[str, Any], batch_size: int) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]]:
     PREVIEW_N = 10
 
     metrics_by_task: Dict[str, Any] = {}
@@ -717,7 +756,8 @@ def _execute_tasks(tasks: Sequence[str], counts: Mapping[str, int], rng: random.
             rng=rng,
             model=model,
             tokenizer=tokenizer,
-            gen_params=gen_params
+            gen_params=gen_params,
+            batch_size=batch_size
         )
         metrics_by_task[task] = metrics
         samples_preview_by_task[task] = samples[:PREVIEW_N]
@@ -792,6 +832,10 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
     tasks: List[str] = list(cfg.eval_cfg["tasks"])
     total = int(cfg.eval_cfg["num_prompts"])
 
+    batch_size = int(cfg.eval_cfg.get("batch_size", 1))
+    if batch_size < 1:
+        raise ValueError(f"eval.batch_size must be >= 1, got {batch_size}")
+
     _validate_tasks(tasks)
 
     mix = cfg.eval_cfg.get("mix")
@@ -860,7 +904,8 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
         rng=rng,
         model=model,
         tokenizer=tokenizer,
-        gen_params=gen_params
+        gen_params=gen_params,
+        batch_size=batch_size
     )
     
     results["metrics"] = metrics_by_task
