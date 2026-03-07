@@ -29,13 +29,15 @@ from src.utils.config_utils import deep_merge, load_yaml_mapping
 
 from src.utils.logging_setup import setup_logging
 
+from src.errors import ConfigError, EvalError, CheckpointError
+
 
 logger = logging.getLogger(__name__)
 
 class EvalConfig:
     def __init__(self, *, model_id: str, seed: int, generation: Dict[str, Any], eval_cfg: Dict[str, Any]) -> None:
         if not model_id:
-            raise ValueError("model.id must be non-empty")
+            raise ConfigError("model.id must be non-empty")
         self.model_id = model_id
         self.seed = seed
         self.generation = generation
@@ -66,7 +68,7 @@ def _require(cfg: Mapping[str, Any], *keys: str) -> Any:
     cur: Any = cfg
     for k in keys:
         if not isinstance(cur, Mapping) or k not in cur:
-            raise ValueError(f"config missing: {'.'.join(keys)}")
+            raise ConfigError(f"config missing: {'.'.join(keys)}")
         cur = cur[k]
     return cur
 
@@ -98,7 +100,7 @@ def _reject_sweeps(cfg_snapshot: Mapping[str, Any], *, allow_sweep: bool) -> Non
     sweepable = ["generation", "seed", "eval", "eval.num_prompts", "eval.mix"]
     list_paths = _find_list_values_at_paths(cfg_snapshot, sweepable)
     if list_paths and not allow_sweep:
-        raise ValueError(
+        raise ConfigError(
             f"Sweep-like config detected (lists under {sweepable}): {list_paths}. "
             "Re-run with --allow_sweep if intended."
         )
@@ -114,9 +116,9 @@ def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) ->
         raw = yaml.safe_load(f)
 
         if raw is None:
-            raise ValueError(f"Empty config: {path}")
+            raise ConfigError(f"Empty config: {path}")
         if not isinstance(raw, Mapping):
-            raise ValueError(f"Top-level config must be a mapping/dict: {path}")
+            raise ConfigError(f"Top-level config must be a mapping/dict: {path}")
 
     # overrides
     if override_paths:
@@ -158,7 +160,7 @@ def task_bucket(task: str) -> str:
     try:
         return _TASK_TO_BUCKET[task]
     except KeyError as e:
-        raise ValueError(f"Unknown task for bucketing: {task}") from e
+        raise ConfigError(f"Unknown task for bucketing: {task}") from e
 
 
 
@@ -174,10 +176,10 @@ def allocate_counts(total: int, tasks: Sequence[str], mix: Mapping[str, float]) 
     bucket_keys = set(buckets.keys())
     missing_keys = sorted(bucket_keys - set(mix.keys()))
     if missing_keys:
-        raise ValueError(f"eval.mix missing bucket keys: {missing_keys}. Needed: {sorted(bucket_keys)}")
+        raise ConfigError(f"eval.mix missing bucket keys: {missing_keys}. Needed: {sorted(bucket_keys)}")
 
     if all(float(mix[k]) == 0.0 for k in bucket_keys):
-        raise ValueError(f"eval.mix assigns zero weight to all required buckets: {sorted(bucket_keys)}")
+        raise ConfigError(f"eval.mix assigns zero weight to all required buckets: {sorted(bucket_keys)}")
 
     raw_bucket = {b: total * float(mix[b]) for b in bucket_keys}
     bucket_counts = {b: int(math.floor(raw_bucket[b])) for b in bucket_keys}
@@ -204,7 +206,7 @@ def allocate_counts(total: int, tasks: Sequence[str], mix: Mapping[str, float]) 
             task_counts[t] += 1
 
     if sum(task_counts.values()) != total:
-        raise RuntimeError(f"allocate_counts invariant violated: sum(task_counts)={sum(task_counts.values())} != total={total}")
+        raise EvalError(f"allocate_counts invariant violated: sum(task_counts)={sum(task_counts.values())} != total={total}")
 
     return task_counts
 
@@ -610,13 +612,13 @@ TASK_REGISTRY: Dict[str, Callable[..., Tuple[dict, List[Dict[str, Any]]]]] = {
 def _validate_tasks(tasks: List[str]) -> None:
     unknown = sorted(set(tasks) - set(TASK_REGISTRY))
     if unknown:
-        raise ValueError(f"Unsupported eval tasks: {unknown}. Supported: {sorted(TASK_REGISTRY)}")
+        raise ConfigError(f"Unsupported eval tasks: {unknown}. Supported: {sorted(TASK_REGISTRY)}")
 
 
 def _validate_mix(mix: Mapping[str, float]) -> None:
     s = float(sum(float(v) for v in mix.values()))
     if abs(s - 1.0) > 1e-6:
-        raise ValueError(f"eval.mix must sum to 1.0, got {s}")
+        raise ConfigError(f"eval.mix must sum to 1.0, got {s}")
 
 
 
@@ -665,7 +667,7 @@ def _validate_deterministic_generation(gen: Mapping[str, Any], *, where: str = "
         bad.append("top_p")
 
     if bad:
-        raise ValueError(f"{where}: non-deterministic generation fields: {bad}. generation={g}")
+        raise ConfigError(f"{where}: non-deterministic generation fields: {bad}. generation={g}")
 
 
 
@@ -739,7 +741,7 @@ def _is_failure(sample: Mapping[str, Any]) -> bool:
         # In your scoring, "unsafe_comply" and "over_refuse" are failures.
         return sample.get("prediction") in ("unsafe_comply", "over_refuse")
 
-    raise ValueError(f"Unknown task in sample: {task}")
+    raise EvalError(f"Unknown task in sample: {task}")
 
 
 def _select_representative_samples(all_samples: Sequence[Mapping[str, Any]], *, per_task: int = 5, max_total: int = 200) -> List[Dict[str, Any]]:
@@ -787,7 +789,7 @@ def _load_eval_model(checkpoint: str, base_model_id: str, torch_dtype: torch.dty
         try:
             from peft import PeftModel
         except ImportError as e:
-            raise ImportError(
+            raise CheckpointError(
                 "PEFT is required to evaluate adapter checkpoints. Install with: pip install peft"
             ) from e
 
@@ -889,7 +891,7 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
 
     # Fail fast if the "checkpoint" is an adapter dir but we don't have a real base model.
     if _is_peft_adapter_dir(checkpoint) and (base_model is None) and (base_model_id == checkpoint):
-        raise ValueError(
+        raise ConfigError(
             "Checkpoint looks like a PEFT adapter directory. Provide --base_model (or set model.id to the base model)."
             )
 
@@ -915,7 +917,7 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
 
     batch_size = int(cfg.eval_cfg.get("batch_size", 1))
     if batch_size < 1:
-        raise ValueError(f"eval.batch_size must be >= 1, got {batch_size}")
+        raise ConfigError(f"eval.batch_size must be >= 1, got {batch_size}")
 
     _validate_tasks(tasks)
 
@@ -994,7 +996,7 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
 
     missing = sorted(set(tasks) - set(results["metrics"].keys()))
     if missing:
-        raise RuntimeError(f"Runner did not produce metrics for: {missing}")
+        raise EvalError(f"Runner did not produce metrics for: {missing}")
         
     out_path = _write_eval_results(output_dir, results, all_samples)
 
