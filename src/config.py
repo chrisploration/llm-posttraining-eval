@@ -5,6 +5,8 @@ import yaml
 
 from src.utils.config_utils import deep_merge, load_yaml_mapping
 
+from src.errors import ConfigError
+
 class PostTrainConfig:
     def __init__(
         self,
@@ -32,22 +34,22 @@ class PostTrainConfig:
     ) -> None:
         # Assume load_config() already casts types; validate only the expensive-failure cases.
         if not base_id:
-            raise ValueError("base_id must be non-empty")
+            raise ConfigError("base_id must be non-empty")
         if not train_file:
-            raise ValueError("train_file must be non-empty")
+            raise ConfigError("train_file must be non-empty")
         if not output_dir:
-            raise ValueError("output_dir must be non-empty")
+            raise ConfigError("output_dir must be non-empty")
 
         if max_seq_length <= 0:
-            raise ValueError("max_seq_length must be > 0")
+            raise ConfigError("max_seq_length must be > 0")
         if micro_batch_size <= 0:
-            raise ValueError("micro_batch_size must be > 0")
+            raise ConfigError("micro_batch_size must be > 0")
         if grad_accum_steps <= 0:
-            raise ValueError("grad_accum_steps must be > 0")
+            raise ConfigError("grad_accum_steps must be > 0")
         if learning_rate <= 0:
-            raise ValueError("learning_rate must be > 0")
+            raise ConfigError("learning_rate must be > 0")
         if not lora_target_modules:
-            raise ValueError("lora_target_modules must be a non-empty list")
+            raise ConfigError("lora_target_modules must be a non-empty list")
 
         self.seed = seed
         self.base_id = base_id
@@ -99,7 +101,7 @@ def _get(d: dict, path: str):
     cur = d
     for key in path.split("."):
         if not isinstance(cur, dict) or key not in cur:
-            raise ValueError(f"Missing required config key: {path}")
+            raise ConfigError(f"Missing required config key: {path}")
         cur = cur[key]
     return cur
 
@@ -109,7 +111,7 @@ def _get(d: dict, path: str):
 
 def load_config_from_dict(raw: Dict[str, Any]) -> PostTrainConfig:
     if not isinstance(raw, dict):
-        raise ValueError("Config must be a mapping/dict")
+        raise ConfigError("Config must be a mapping/dict")
 
     model = _get(raw, "model")
     data = _get(raw, "data")
@@ -120,15 +122,15 @@ def load_config_from_dict(raw: Dict[str, Any]) -> PostTrainConfig:
 
     method = str(training["method"]).strip().lower()
     if method != "sft":
-        raise ValueError("v1 only supports training.method: sft")
+        raise ConfigError("v1 only supports training.method: sft")
 
     data_format = str(data["format"]).strip().lower()
     if data_format != "chat":
-        raise ValueError("v1 expects data.format: chat and JSONL with a 'messages' field.")
+        raise ConfigError("v1 expects data.format: chat and JSONL with a 'messages' field.")
 
     lora_targets = list(lora["target_modules"])
     if not lora_targets:
-        raise ValueError("lora.target_modules must be a non-empty list")
+        raise ConfigError("lora.target_modules must be a non-empty list")
 
     return PostTrainConfig(
         seed=int(raw.get("seed", 0)),
@@ -159,13 +161,13 @@ def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) ->
         raw = yaml.safe_load(f) or {}
 
     if not isinstance(raw, dict):
-        raise ValueError(f"Top-level config must be a mapping/dict: {path}")
+        raise ConfigError(f"Top-level config must be a mapping/dict: {path}")
 
     if override_paths:
         raw = dict(raw)
         for opath in override_paths:
             ov = load_yaml_mapping(opath)
-            deep_merge(raw, ov)
+            raw = deep_merge(raw, ov)
 
     cfg = load_config_from_dict(raw)
 
