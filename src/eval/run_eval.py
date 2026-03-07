@@ -14,6 +14,7 @@ import transformers
 import platform
 import socket
 import copy
+import logging
 
 from datetime import datetime, timezone
 from typing import Callable, Dict, Sequence, Mapping, List, Any, Optional, Tuple, Union
@@ -26,6 +27,10 @@ from src.train_artifacts import require_accelerate_if_needed, _git_sha, guard_ou
 
 from src.utils.config_utils import deep_merge, load_yaml_mapping
 
+from src.utils.logging_setup import setup_logging
+
+
+logger = logging.getLogger(__name__)
 
 class EvalConfig:
     def __init__(self, *, model_id: str, seed: int, generation: Dict[str, Any], eval_cfg: Dict[str, Any]) -> None:
@@ -872,6 +877,7 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
 
 # CLI entry point that parses arguments and invokes the evaluation run, writing the aggregated results to disk.
 def main() -> None:
+    setup_logging()
     ap = argparse.ArgumentParser(description="Run model evaluation from a YAML config.")
     ap.add_argument(
         "--config",
@@ -918,7 +924,7 @@ def main() -> None:
     args = ap.parse_args()
 
     out_path = run(args.config, args.output_dir, mode=args.mode, model_checkpoint=args.checkpoint, base_model=args.base_model, allow_sweep=args.allow_sweep, strict_determinism=args.strict_determinism, override_paths=args.override)
-    print(f"Wrote {out_path}")
+    logger.info("Wrote %s", out_path)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ from src.config import load_config, PostTrainConfig, load_config_from_dict
 import torch
 import os
 import argparse
+import logging
 
 from typing import Tuple, Sequence, Optional, Dict, Any
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, set_seed, TrainerCallback
@@ -13,8 +14,10 @@ from datasets import Dataset
 
 from src.train_artifacts import guard_output_dir_empty, write_yaml, write_json, build_train_meta, append_jsonl, require_accelerate_if_needed
 from src.utils.config_utils import deep_merge
+from src.utils.logging_setup import setup_logging
 
 
+logger = logging.getLogger(__name__)
 
 def build_model(cfg: PostTrainConfig) -> Tuple[torch.nn.Module, AutoTokenizer]:
     tokenizer = AutoTokenizer.from_pretrained(cfg.base_id, use_fast=True)
@@ -72,7 +75,10 @@ def build_model(cfg: PostTrainConfig) -> Tuple[torch.nn.Module, AutoTokenizer]:
     )
     model = get_peft_model(model, peft_cfg)
 
-    model.print_trainable_parameters()
+    trainable_params, all_params = model.get_nb_trainable_parameters()
+    trainable_pct = 100 * trainable_params / all_params
+    logger.info("Trainable params: %s | All params: %s | Trainable%%: %.4f", trainable_params, all_params, trainable_pct)
+
     return model, tokenizer
 
 
@@ -174,11 +180,15 @@ def run_training(
         callbacks=[JsonlLoggerCallback(log_path)]
     )
 
+    logger.info("Starting training...")
+
     trainer.train(resume_from_checkpoint=resume_from)
 
     # Save adapter weights (not full base model) + tokenizer.
     trainer.model.save_pretrained(cfg.output_dir)
     tokenizer.save_pretrained(cfg.output_dir)
+
+    logger.info("Saved checkpoint to %s", cfg.output_dir)
 
 
 
@@ -219,7 +229,7 @@ def run_training_entry(*, config_path: str, override_paths: Sequence[str], outpu
         free_mem_gb = free_bytes / 1e9
         total_mem_gb = total_bytes / 1e9
 
-        print(f"GPU memory available after model load: {free_mem_gb:.1f}GB free / {total_mem_gb:.1f}GB total")
+        logger.info("GPU memory available after model load: %.1fGB free / %.1fGB total", free_mem_gb, total_mem_gb)
 
         if free_mem_gb < 2.0:
             raise RuntimeError(
@@ -242,6 +252,7 @@ def run_training_entry(*, config_path: str, override_paths: Sequence[str], outpu
 
 
 def main() -> None:
+    setup_logging()
     ap = argparse.ArgumentParser(description="Run post-training from a YAML config.")
     ap.add_argument("--config",
                     default="configs/posttrain.yaml",
