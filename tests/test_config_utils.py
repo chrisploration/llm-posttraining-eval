@@ -46,8 +46,11 @@ class TestDeepMerge(unittest.TestCase):
         base = {"nested": 123}
         override = {"nested": {"x": 1}}
 
-        with self.assertRaises(TypeError):
-            deep_merge(base, override)
+        result = deep_merge(base, override)
+
+        self.assertIs(result, base)
+        self.assertEqual(result["nested"], {"x": 1})
+
 
     def test_mutates_base_in_place(self) -> None:
         base = {"a": 1}
