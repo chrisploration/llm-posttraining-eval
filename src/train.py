@@ -16,6 +16,8 @@ from src.train_artifacts import guard_output_dir_empty, write_yaml, write_json, 
 from src.utils.config_utils import deep_merge
 from src.utils.logging_setup import setup_logging
 
+from src.errors import ConfigError, DataError
+
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +41,7 @@ def build_model(cfg: PostTrainConfig) -> Tuple[torch.nn.Module, AutoTokenizer]:
         try:
             import bitsandbytes  # noqa: F401
         except Exception as e:
-            raise RuntimeError(
+            raise ConfigError(
                 "load_in_4bit=true requires bitsandbytes. Install with: pip install bitsandbytes"
             ) from e
 
@@ -84,11 +86,11 @@ def build_model(cfg: PostTrainConfig) -> Tuple[torch.nn.Module, AutoTokenizer]:
 
 def load_data(cfg: PostTrainConfig, tokenizer: AutoTokenizer) -> Dataset:
     if not os.path.exists(cfg.train_file):
-        raise FileNotFoundError(f"Training file not found: {cfg.train_file}")
+        raise DataError(f"Training file not found: {cfg.train_file}")
 
     ds = load_dataset("json", data_files={"train": cfg.train_file})["train"]
     if "messages" not in ds.column_names:
-        raise ValueError("Training JSONL must contain a 'messages' field per line for v1.")
+        raise DataError("Training JSONL must contain a 'messages' field per line for v1.")
 
     def messages_to_text(messages):
         # Normalize
@@ -99,7 +101,7 @@ def load_data(cfg: PostTrainConfig, tokenizer: AutoTokenizer) -> Dataset:
             if role and content:
                 norm.append({"role": role, "content": content})
         if not norm:
-            raise ValueError("Empty/invalid messages in one training example")
+            raise DataError("Empty/invalid messages in one training example")
 
         # Prefer model's chat template if available
         if hasattr(tokenizer, "apply_chat_template") and getattr(tokenizer, "chat_template", None):
@@ -232,7 +234,7 @@ def run_training_entry(*, config_path: str, override_paths: Sequence[str], outpu
         logger.info("GPU memory available after model load: %.1fGB free / %.1fGB total", free_mem_gb, total_mem_gb)
 
         if free_mem_gb < 2.0:
-            raise RuntimeError(
+            raise ConfigError(
                 f"Only {free_mem_gb:.1f}GB free GPU memory after model load. Need at least 2.0GB."
             )
 
