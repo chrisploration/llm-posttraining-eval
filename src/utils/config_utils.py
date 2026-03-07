@@ -1,6 +1,7 @@
 from typing import Any, Dict, Mapping
 import yaml
 
+from src.errors import ConfigError
 
 
 def deep_merge(base: Dict[str, Any], override: Mapping[str, Any]) -> Dict[str, Any]:
@@ -26,5 +27,5 @@ def load_yaml_mapping(path: str) -> Dict[str, Any]:
     if obj is None:
         return {}
     if not isinstance(obj, Mapping):
-        raise ValueError(f"Override YAML must be a mapping/dict at top-level: {path}")
+        raise ConfigError(f"Override YAML must be a mapping/dict at top-level: {path}")
     return dict(obj)
