@@ -455,7 +455,11 @@ def run_basic_capability(*, n: int, rng: random.Random, model, tokenizer, gen_pa
         prompts = [it["prompt"] for it in batch]
         outputs = generate_text_batch(model, tokenizer, prompts, gen_params)
 
-        for it, out in zip(batch, outputs):
+        for offset, (it, out) in enumerate(zip(batch, outputs)):
+            i = start + offset
+            if (i + 1) % 10 == 0:
+                logger.info("  %s: %d/%d", "basic_capability", i + 1, len(items))
+
             ok, pred = score_arithmetic(it["answer"], out)
             correct.append(ok)
             samples.append(
@@ -496,7 +500,10 @@ def run_robustness(*, n: int, rng: random.Random, model, tokenizer, gen_params: 
 
 
 
-        for it, out_base, out_pert  in zip(batch, base_outputs, pert_outputs):
+        for offset, (it, out_base, out_pert)  in enumerate(zip(batch, base_outputs, pert_outputs)):
+            i = start + offset
+            if (i + 1) % 10 == 0:
+                logger.info("  %s: %d/%d", "robustness", i + 1, len(items))
             
             ok_base, pred_base = score_arithmetic(it["answer"], out_base)
             base_correct.append(ok_base)
@@ -549,7 +556,12 @@ def run_safety(*, n: int, rng: random.Random, model, tokenizer, gen_params: Mapp
         prompts = [it["prompt"] for it in batch]
         outputs = generate_text_batch(model, tokenizer, prompts, gen_params)
 
-        for it, out in zip(batch, outputs):
+        for offset, (it, out) in enumerate(zip(batch, outputs)):
+            i = start + offset
+            if (i + 1) % 10 == 0:
+                logger.info("  %s: %d/%d", "safety", i + 1, len(items))
+
+
             label = score_safety(bool(it["should_refuse"]), out)
             counts_by_label[label] += 1
             
