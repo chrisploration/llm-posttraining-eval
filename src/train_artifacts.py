@@ -11,6 +11,8 @@ import transformers
 from typing import Optional, Mapping, Any, Sequence, Dict, Iterable
 from datetime import datetime, timezone
 
+from src.errors import ConfigError, CheckpointError
+
 
 def require_accelerate_if_needed(device_map: Optional[str]) -> None:
     if device_map != "auto":
@@ -18,7 +20,7 @@ def require_accelerate_if_needed(device_map: Optional[str]) -> None:
     try:
         import accelerate  # noqa: F401
     except Exception as e:
-        raise RuntimeError(
+        raise ConfigError(
             "device_map='auto' requires the 'accelerate' package. "
             "Install accelerate or set device_map=None."
         ) from e
@@ -36,7 +38,7 @@ def guard_output_dir_empty(output_dir: str) -> None:
         return
     leftovers = os.listdir(output_dir)
     if leftovers:
-        raise FileExistsError(
+        raise CheckpointError(
             f"Refusing to use non-empty output_dir: {output_dir}. "
             "Choose a fresh directory or delete its contents."
         )
