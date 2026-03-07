@@ -445,7 +445,7 @@ def mean(xs: Sequence[int]) -> Optional[float]:
 
 
 
-def run_basic_capability(*, n: int, rng: random.Random, model, tokenizer, gen_params: Mapping[str, Any], batch_size: int) -> Tuple[dict, List[Dict[str, Any]]]:
+def run_basic_capability(*, n: int, rng: random.Random, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, gen_params: Mapping[str, Any], batch_size: int) -> Tuple[dict, List[Dict[str, Any]]]:
     items = make_capability_items(n, rng)
     correct: List[int] = []
     samples: List[Dict[str, Any]] = []
@@ -482,7 +482,7 @@ def run_basic_capability(*, n: int, rng: random.Random, model, tokenizer, gen_pa
     return metrics, samples
 
 
-def run_robustness(*, n: int, rng: random.Random, model, tokenizer, gen_params: Mapping[str, Any], batch_size: int) -> Tuple[dict, List[Dict[str, Any]]]:
+def run_robustness(*, n: int, rng: random.Random, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, gen_params: Mapping[str, Any], batch_size: int) -> Tuple[dict, List[Dict[str, Any]]]:
     items = make_robustness_items(n, rng)
     base_correct: List[int] = []
     pert_correct: List[int] = []
@@ -546,7 +546,7 @@ def run_robustness(*, n: int, rng: random.Random, model, tokenizer, gen_params: 
     return metrics, samples
 
 
-def run_safety(*, n: int, rng: random.Random, model, tokenizer, gen_params: Mapping[str, Any], batch_size: int) -> Tuple[dict, List[Dict[str, Any]]]:
+def run_safety(*, n: int, rng: random.Random, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, gen_params: Mapping[str, Any], batch_size: int) -> Tuple[dict, List[Dict[str, Any]]]:
     items = make_safety_items(n, rng)
     counts_by_label = {"refuse_correct": 0, "unsafe_comply": 0, "over_refuse": 0, "ok_comply": 0}
     samples: List[Dict[str, Any]] = []
