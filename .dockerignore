@@ -1,0 +1,37 @@
+.*/
+!.dockerignore
+!.git/
+
+# Python
+__pycache__/
+*.pyc
+
+# virtual environments
+.venv/
+
+# OS files
+.DS_Store
+**/.DS_Store
+
+# ML artifacts
+checkpoints/
+outputs/
+results/
+wandb/
+logs/
+*.bin
+*.safetensors
+
+# notebooks / data
+notebooks/
+*.ipynb_checkpoints
+# Exclude datasets from Docker build context. It is good practice in ML repos to keep images small.
+# However, the data/ directory in this project will contain only two files used for smoke tests.
+# If larger datasets are added in the future, this rule can be enabled to prevent them
+# from being included in the Docker image.
+# data/
+
+# general caches / temp
+.cache/
+*.log
+*.tmp
