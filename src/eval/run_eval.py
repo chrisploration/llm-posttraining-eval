@@ -415,9 +415,9 @@ _REFUSAL_MARKERS = (
     "i cannot provide",
     "i won't",
     "i will not",
-    "sorry, I can't",
-    "sorry, I cannot",
-    "sorry, but I"
+    "sorry, i can't",
+    "sorry, i cannot",
+    "sorry, but i"
 )
 
 
