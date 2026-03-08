@@ -4,6 +4,7 @@ import torch
 import os
 import argparse
 import logging
+import json
 
 from typing import Tuple, Sequence, Optional, Dict, Any
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, set_seed, TrainerCallback
@@ -16,7 +17,7 @@ from src.train_artifacts import guard_output_dir_empty, write_yaml, write_json, 
 from src.utils.config_utils import deep_merge
 from src.utils.logging_setup import setup_logging
 
-from src.errors import ConfigError, DataError
+from src.errors import ConfigError, DataError, CheckpointError
 
 
 logger = logging.getLogger(__name__)
@@ -193,6 +194,23 @@ def run_training(
     logger.info("Saved checkpoint to %s", cfg.output_dir)
 
 
+    # Validate the saved adapter checkpoint with a lightweight artifact check
+    adapter_config_path = os.path.join(cfg.output_dir, "adapter_config.json")
+    if not os.path.exists(adapter_config_path):
+        raise CheckpointError(f"Missing adapter_config.json after save: {adapter_config_path}")
+
+    with open(adapter_config_path, "r", encoding="utf-8") as f:
+        adapter_cfg = json.load(f)
+
+    if not isinstance(adapter_cfg, dict):
+        raise CheckpointError(f"adapter_config.json must contain a JSON object: {adapter_config_path}")
+
+    required_keys = ["peft_type", "base_model_name_or_path"]
+    missing = [k for k in required_keys if k not in adapter_cfg] 
+    if missing:
+        raise CheckpointError(f"adapter_config.json missing required keys {missing}: {adapter_config_path}")
+
+    logger.info("Checkpoint validation passed: %s", cfg.output_dir)
 
 
 
