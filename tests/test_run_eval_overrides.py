@@ -5,6 +5,9 @@ import tempfile
 import yaml
 import os
 
+from src.errors import ConfigError
+
+
 class TestEvalOverrides(unittest.TestCase):
     def test_override_updates_num_prompts_keeps_batch_size(self) -> None:
         base_cfg = {
@@ -48,7 +51,7 @@ class TestEvalOverrides(unittest.TestCase):
             with open(bad_ov_path, "w", encoding="utf-8") as f:
                 yaml.safe_dump(["not-a-mapping"], f, sort_keys=False)
 
-            with self.assertRaises(ValueError):
+            with self.assertRaises(ConfigError):
                 run_eval.load_config(base_path, override_paths=[bad_ov_path])
 
     def test_is_peft_adapter_dir_detects_adapter_config(self) -> None:
