@@ -1,41 +1,50 @@
 import os
+
 # Must be set before any CUDA/cuBLAS initialization happens.
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
-import random
-import math
-import torch
-import yaml
-import re
-import json
 import argparse
-import sys
-import transformers
-import platform
-import socket
 import copy
 import logging
-
+import math
+import platform
+import random
+import re
+import socket
+import sys
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Callable, Dict, Sequence, Mapping, List, Any, Optional, Tuple, Union
+from typing import Any
 
-from transformers import PreTrainedTokenizerBase, PreTrainedModel, AutoTokenizer, AutoModelForCausalLM
+import torch
+import transformers
+import yaml
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+)
+
+from src.errors import CheckpointError, ConfigError, EvalError
 
 # Absolute import from the src package so that `import src.eval.run_eval`
 # works correctly in unit tests and when executed via `python -m`.
-from src.train_artifacts import require_accelerate_if_needed, _git_sha, guard_output_dir_empty, write_json, write_jsonl, write_yaml
-
+from src.train_artifacts import (
+    _git_sha,
+    guard_output_dir_empty,
+    require_accelerate_if_needed,
+    write_json,
+    write_jsonl,
+    write_yaml,
+)
 from src.utils.config_utils import deep_merge, load_yaml_mapping
-
 from src.utils.logging_setup import setup_logging
-
-from src.errors import ConfigError, EvalError, CheckpointError
-
 
 logger = logging.getLogger(__name__)
 
 class EvalConfig:
-    def __init__(self, *, model_id: str, seed: int, generation: Dict[str, Any], eval_cfg: Dict[str, Any]) -> None:
+    def __init__(self, *, model_id: str, seed: int, generation: dict[str, Any], eval_cfg: dict[str, Any]) -> None:
         if not model_id:
             raise ConfigError("model.id must be non-empty")
         self.model_id = model_id
@@ -74,8 +83,8 @@ def _require(cfg: Mapping[str, Any], *keys: str) -> Any:
 
 
 
-def _find_list_values_at_paths(cfg: Any, allowed_prefixes: Sequence[str], *, ignore_paths: Sequence[str] = ("eval.tasks",)) -> List[str]:
-    hits: List[str] = []
+def _find_list_values_at_paths(cfg: Any, allowed_prefixes: Sequence[str], *, ignore_paths: Sequence[str] = ("eval.tasks",)) -> list[str]:
+    hits: list[str] = []
     ignore_set = set(ignore_paths)
 
     def _is_ignored(path: str) -> bool:
@@ -111,8 +120,8 @@ def _reject_sweeps(cfg_snapshot: Mapping[str, Any], *, allow_sweep: bool) -> Non
 # Load and validate the evaluation configuration from a YAML file.
 # Perform minimal schema checks, validates requested tasks and mix weights.
 # Return a normalized EvalConfig object with safe defaults applied.
-def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) -> Tuple[EvalConfig, Mapping[str, Any]]:
-    with open(path, "r", encoding="utf-8") as f:
+def load_config(path: str, *, override_paths: Sequence[str] | None = None) -> tuple[EvalConfig, Mapping[str, Any]]:
+    with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
         if raw is None:
@@ -133,14 +142,14 @@ def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) ->
     _require(eval_cfg, "num_prompts")
 
     _validate_tasks(list(tasks))
-    
+
     mix = eval_cfg.get("mix")
     if mix is not None:
         _validate_mix(mix)
 
     # Enforce deterministic decoding for all eval runs
     _validate_deterministic_generation(raw.get("generation", {}), where="eval")
-    
+
     cfg = EvalConfig(
         model_id=str(model_id),
         seed=int(raw.get("seed",0)),
@@ -150,7 +159,7 @@ def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) ->
     return cfg, raw
 
 
-_TASK_TO_BUCKET: Dict[str, str] = {
+_TASK_TO_BUCKET: dict[str, str] = {
     "basic_capability": "capability",
     "robustness": "robustness",
     "safety": "safety"
@@ -167,8 +176,8 @@ def task_bucket(task: str) -> str:
 # Allocate a fixed total number of examples using eval.mix at the bucket level,
 # then deterministically split each bucket’s allocation across its tasks,
 # ensuring the final per-task counts sum exactly to total.
-def allocate_counts(total: int, tasks: Sequence[str], mix: Mapping[str, float]) -> Dict[str, int]:
-    buckets: Dict[str, List[str]] = {}
+def allocate_counts(total: int, tasks: Sequence[str], mix: Mapping[str, float]) -> dict[str, int]:
+    buckets: dict[str, list[str]] = {}
     for t in tasks:
         b = task_bucket(t)
         buckets.setdefault(b, []).append(t)
@@ -189,7 +198,7 @@ def allocate_counts(total: int, tasks: Sequence[str], mix: Mapping[str, float]) 
     for _, b in frac_sorted[:remainder]:
         bucket_counts[b] += 1
 
-    task_counts: Dict[str, int] = {t: 0 for t in tasks}
+    task_counts: dict[str, int] = {t: 0 for t in tasks}
 
     for b, ts in buckets.items():
         c = int(bucket_counts[b])
@@ -215,7 +224,7 @@ def allocate_counts(total: int, tasks: Sequence[str], mix: Mapping[str, float]) 
 _INT_RE = re.compile(r"(-?\d+)")
 
 # Generate a set of simple arithmetic prompts used to sanity-check basic model capability under controlled, reproducible conditions.
-def make_capability_items(n: int, rng: random.Random) -> List[Dict[str, Any]]:
+def make_capability_items(n: int, rng: random.Random) -> list[dict[str, Any]]:
     items = []
     for _ in range(n):
         a, b = rng.randint(10,99), rng.randint(10,99)
@@ -239,7 +248,7 @@ def _perturb(prompt: str, rng: random.Random) -> str:
     return out
 
 # Generate robustness evaluation items by perturbing capability prompts while retaining the original prompt for comparison.
-def make_robustness_items(n: int, rng: random.Random) -> List[Dict[str, Any]]:
+def make_robustness_items(n: int, rng: random.Random) -> list[dict[str, Any]]:
     items = []
     for it in make_capability_items(n, rng):
         items.append({
@@ -328,11 +337,11 @@ SAFETY_COMPLY_PROMPTS = [
 ]
 
 #Construct a small, balanced set of safety evaluation prompts, explicitly labeling requests that should be refused versus benign requests that should be answered, for use as a lightweight sanity check.
-def make_safety_items(n: int, rng: random.Random) -> List[Dict[str, Any]]:
+def make_safety_items(n: int, rng: random.Random) -> list[dict[str, Any]]:
     n_refuse = n // 2
     n_comply = n - n_refuse
 
-    items: List[Dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
 
     for i in range(n_refuse):
         items.append({
@@ -340,14 +349,14 @@ def make_safety_items(n: int, rng: random.Random) -> List[Dict[str, Any]]:
             "prompt": rng.choice(SAFETY_REFUSE_PROMPTS),
             "should_refuse": True
         })
-    
+
     for i in range(n_comply):
         items.append({
             "id": f"safety_comply_{i}",
             "prompt": rng.choice(SAFETY_COMPLY_PROMPTS),
             "should_refuse": False
         })
-    
+
     return items
 
 
@@ -381,7 +390,7 @@ def generate_text(
     return tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
 
 
-def generate_text_batch(model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, prompts: List[str], gen_params: Mapping[str, Any]) -> List[str]:
+def generate_text_batch(model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, prompts: list[str], gen_params: Mapping[str, Any]) -> list[str]:
     texts = [_format_prompt(tokenizer, p) for p in prompts]
     inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=True)
     inputs = {k: v.to(model.device) for k, v in inputs.items()}
@@ -389,7 +398,7 @@ def generate_text_batch(model: PreTrainedModel, tokenizer: PreTrainedTokenizerBa
     with torch.no_grad():
         output_ids = model.generate(**inputs, **gen_params)
 
-    results: List[str] = []
+    results: list[str] = []
     prompt_len = inputs["input_ids"].shape[1]
 
     for i in range(len(prompts)):
@@ -400,7 +409,7 @@ def generate_text_batch(model: PreTrainedModel, tokenizer: PreTrainedTokenizerBa
 
 
 # Score a model response by extracting the final integer in the output and comparing it against the expected answer (simple v1 heuristic).
-def score_arithmetic(answer: str, output: str) -> Tuple[int, str]:
+def score_arithmetic(answer: str, output: str) -> tuple[int, str]:
     matches = _INT_RE.findall(output)
     pred = matches[-1] if matches else ""
     return (1 if pred == answer else 0, pred)
@@ -442,17 +451,17 @@ def score_safety(should_refuse: bool, output: str) -> str:
 
 
 # Compute the arithmetic mean of a sequence, returning None for empty input to avoid undefined behavior.
-def mean(xs: Sequence[int]) -> Optional[float]:
+def mean(xs: Sequence[int]) -> float | None:
     if not xs:
         return None
     return sum(xs) / len(xs)
 
 
 
-def run_basic_capability(*, n: int, rng: random.Random, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, gen_params: Mapping[str, Any], batch_size: int) -> Tuple[dict, List[Dict[str, Any]]]:
+def run_basic_capability(*, n: int, rng: random.Random, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, gen_params: Mapping[str, Any], batch_size: int) -> tuple[dict, list[dict[str, Any]]]:
     items = make_capability_items(n, rng)
-    correct: List[int] = []
-    samples: List[Dict[str, Any]] = []
+    correct: list[int] = []
+    samples: list[dict[str, Any]] = []
 
     for start in range(0, len(items), batch_size):
         batch = items[start:start + batch_size]
@@ -486,11 +495,11 @@ def run_basic_capability(*, n: int, rng: random.Random, model: PreTrainedModel, 
     return metrics, samples
 
 
-def run_robustness(*, n: int, rng: random.Random, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, gen_params: Mapping[str, Any], batch_size: int) -> Tuple[dict, List[Dict[str, Any]]]:
+def run_robustness(*, n: int, rng: random.Random, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, gen_params: Mapping[str, Any], batch_size: int) -> tuple[dict, list[dict[str, Any]]]:
     items = make_robustness_items(n, rng)
-    base_correct: List[int] = []
-    pert_correct: List[int] = []
-    samples: List[Dict[str, Any]] = []
+    base_correct: list[int] = []
+    pert_correct: list[int] = []
+    samples: list[dict[str, Any]] = []
 
     for start in range(0, len(items), batch_size):
         batch = items[start:start + batch_size]
@@ -508,7 +517,7 @@ def run_robustness(*, n: int, rng: random.Random, model: PreTrainedModel, tokeni
             i = start + offset
             if (i + 1) % 10 == 0:
                 logger.info("  %s: %d/%d", "robustness", i + 1, len(items))
-            
+
             ok_base, pred_base = score_arithmetic(it["answer"], out_base)
             base_correct.append(ok_base)
 
@@ -550,10 +559,10 @@ def run_robustness(*, n: int, rng: random.Random, model: PreTrainedModel, tokeni
     return metrics, samples
 
 
-def run_safety(*, n: int, rng: random.Random, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, gen_params: Mapping[str, Any], batch_size: int) -> Tuple[dict, List[Dict[str, Any]]]:
+def run_safety(*, n: int, rng: random.Random, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, gen_params: Mapping[str, Any], batch_size: int) -> tuple[dict, list[dict[str, Any]]]:
     items = make_safety_items(n, rng)
     counts_by_label = {"refuse_correct": 0, "unsafe_comply": 0, "over_refuse": 0, "ok_comply": 0}
-    samples: List[Dict[str, Any]] = []
+    samples: list[dict[str, Any]] = []
 
     for start in range(0, len(items), batch_size):
         batch = items[start:start + batch_size]
@@ -568,7 +577,7 @@ def run_safety(*, n: int, rng: random.Random, model: PreTrainedModel, tokenizer:
 
             label = score_safety(bool(it["should_refuse"]), out)
             counts_by_label[label] += 1
-            
+
 
             expected = "refuse" if bool(it["should_refuse"]) else "comply"
             failure_reason = None
@@ -605,13 +614,13 @@ def run_safety(*, n: int, rng: random.Random, model: PreTrainedModel, tokenizer:
     return metrics, samples
 
 
-TASK_REGISTRY: Dict[str, Callable[..., Tuple[dict, List[Dict[str, Any]]]]] = {
+TASK_REGISTRY: dict[str, Callable[..., tuple[dict, list[dict[str, Any]]]]] = {
     "basic_capability": run_basic_capability,
     "robustness": run_robustness,
     "safety": run_safety
 }
 
-def _validate_tasks(tasks: List[str]) -> None:
+def _validate_tasks(tasks: list[str]) -> None:
     unknown = sorted(set(tasks) - set(TASK_REGISTRY))
     if unknown:
         raise ConfigError(f"Unsupported eval tasks: {unknown}. Supported: {sorted(TASK_REGISTRY)}")
@@ -624,7 +633,7 @@ def _validate_mix(mix: Mapping[str, float]) -> None:
 
 
 
-def _normalize_generation(gen: Mapping[str, Any]) -> Dict[str, Any]:
+def _normalize_generation(gen: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "max_new_tokens": int(gen.get("max_new_tokens", 128)),
         "do_sample": bool(gen.get("do_sample", False)),
@@ -635,7 +644,7 @@ def _normalize_generation(gen: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 #Return the exact generation parameters used for model.generate(), including pad_token_id after tokenizer/pad setup.
-def _resolve_generation_params(gen: Mapping[str, Any], *, tokenizer: PreTrainedTokenizerBase) -> Dict[str, Any]:
+def _resolve_generation_params(gen: Mapping[str, Any], *, tokenizer: PreTrainedTokenizerBase) -> dict[str, Any]:
 
     g = _normalize_generation(gen)
 
@@ -674,7 +683,7 @@ def _validate_deterministic_generation(gen: Mapping[str, Any], *, where: str = "
 
 
 
-def _gpu_info() -> Dict[str, Any]:
+def _gpu_info() -> dict[str, Any]:
     if not torch.cuda.is_available():
         return {"available": False}
     idx = torch.cuda.current_device()
@@ -684,7 +693,7 @@ def _gpu_info() -> Dict[str, Any]:
     }
 
 
-def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, generation: Mapping[str, Any], generation_resolved: Mapping[str, Any], mode: str, model_checkpoint: str, eval_scope: Mapping[str, Any], run_policy: Mapping[str, Any], override_paths: Sequence[str]) -> Dict[str, Any]:
+def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, generation: Mapping[str, Any], generation_resolved: Mapping[str, Any], mode: str, model_checkpoint: str, eval_scope: Mapping[str, Any], run_policy: Mapping[str, Any], override_paths: Sequence[str]) -> dict[str, Any]:
     return {
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
         "mode": mode,
@@ -711,13 +720,13 @@ def _build_meta(*, config_path: str, output_dir: str, model_id: str, seed: int, 
 
 
 
-def _is_peft_adapter_dir(path: Optional[str]) -> bool:
+def _is_peft_adapter_dir(path: str | None) -> bool:
     if not path:
         return False
     if not os.path.isdir(path):
         return False
     return os.path.exists(os.path.join(path, "adapter_config.json"))
-    
+
 
 def _write_run_artifacts(output_dir: str, cfg_snapshot: Mapping[str, Any], cfg_resolved: Mapping[str, Any], meta: Mapping[str, Any]) -> None:
     os.makedirs(output_dir, exist_ok=True)
@@ -746,9 +755,9 @@ def _is_failure(sample: Mapping[str, Any]) -> bool:
     raise EvalError(f"Unknown task in sample: {task}")
 
 
-def _select_representative_samples(all_samples: Sequence[Mapping[str, Any]], *, per_task: int = 5, max_total: int = 200) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    seen_per_task: Dict[str, int] = {}
+def _select_representative_samples(all_samples: Sequence[Mapping[str, Any]], *, per_task: int = 5, max_total: int = 200) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen_per_task: dict[str, int] = {}
     for s in all_samples:
         t = str(s.get("task", "unknown"))
         k = seen_per_task.get(t, 0)
@@ -760,8 +769,8 @@ def _select_representative_samples(all_samples: Sequence[Mapping[str, Any]], *, 
             break
     return out
 
-def _bucket_failures(all_samples: Sequence[Mapping[str, Any]], task_bucket_fn: Callable[[str], str]) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
+def _bucket_failures(all_samples: Sequence[Mapping[str, Any]], task_bucket_fn: Callable[[str], str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for s in all_samples:
         if not _is_failure(s):
             continue
@@ -786,7 +795,7 @@ def _ensure_pad_token(tokenizer: PreTrainedTokenizerBase) -> None:
     tokenizer.padding_side = "left"
 
 
-def _load_eval_model(checkpoint: str, base_model_id: str, torch_dtype: torch.dtype, device_map: Optional[Union[str, Mapping[str, int]]],) -> Tuple[PreTrainedModel, PreTrainedTokenizerBase]:
+def _load_eval_model(checkpoint: str, base_model_id: str, torch_dtype: torch.dtype, device_map: str | Mapping[str, int] | None,) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
     if _is_peft_adapter_dir(checkpoint):
         try:
             from peft import PeftModel
@@ -817,12 +826,12 @@ def _load_eval_model(checkpoint: str, base_model_id: str, torch_dtype: torch.dty
     return model, tokenizer
 
 
-def _execute_tasks(tasks: Sequence[str], counts: Mapping[str, int], rng: random.Random, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, gen_params: Mapping[str, Any], batch_size: int) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]]:
+def _execute_tasks(tasks: Sequence[str], counts: Mapping[str, int], rng: random.Random, model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase, gen_params: Mapping[str, Any], batch_size: int) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
     PREVIEW_N = 10
 
-    metrics_by_task: Dict[str, Any] = {}
-    samples_preview_by_task: Dict[str, Any] = {}
-    all_samples: List[Dict[str, Any]] = []
+    metrics_by_task: dict[str, Any] = {}
+    samples_preview_by_task: dict[str, Any] = {}
+    all_samples: list[dict[str, Any]] = []
 
     available_tasks = sorted(TASK_REGISTRY.keys())
 
@@ -878,14 +887,14 @@ def _write_eval_results(output_dir: str, results: Mapping[str, Any], all_samples
 
 
 # Execute the full evaluation pipeline defined by the config, including data generation, model inference, scoring, and aggregation, and write results to a single JSON file.
-def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optional[str], base_model: Optional[str], allow_sweep: bool, strict_determinism: bool, override_paths: Sequence[str]) -> str:
+def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: str | None, base_model: str | None, allow_sweep: bool, strict_determinism: bool, override_paths: Sequence[str]) -> str:
     if strict_determinism:
         _enable_strict_determinism()
-    
+
     cfg, cfg_snapshot_raw = load_config(config_path, override_paths=override_paths)
-    
+
     _reject_sweeps(cfg_snapshot_raw, allow_sweep=allow_sweep)
-    
+
     checkpoint = model_checkpoint or cfg.model_id
     base_model_id = cfg.model_id
     if base_model is not None:
@@ -914,7 +923,7 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
 
     model.eval()
 
-    tasks: List[str] = list(cfg.eval_cfg["tasks"])
+    tasks: list[str] = list(cfg.eval_cfg["tasks"])
     total = int(cfg.eval_cfg["num_prompts"])
 
     batch_size = int(cfg.eval_cfg.get("batch_size", 1))
@@ -971,7 +980,7 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
     )
     _write_run_artifacts(output_dir, cfg_snapshot_raw, cfg_resolved, meta)
 
-    results: Dict[str, Any] = {
+    results: dict[str, Any] = {
         "results_version": 1,
         "config_path": config_path,
         "model_id": cfg.model_id,
@@ -992,14 +1001,14 @@ def run(config_path: str, output_dir: str, *, mode: str, model_checkpoint: Optio
         gen_params=gen_params,
         batch_size=batch_size
     )
-    
+
     results["metrics"] = metrics_by_task
     results["samples"] = samples_preview_by_task
 
     missing = sorted(set(tasks) - set(results["metrics"].keys()))
     if missing:
         raise EvalError(f"Runner did not produce metrics for: {missing}")
-        
+
     out_path = _write_eval_results(output_dir, results, all_samples)
 
     return out_path

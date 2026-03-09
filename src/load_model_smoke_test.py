@@ -1,5 +1,6 @@
-import torch
 import random
+
+import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from src.train_artifacts import require_accelerate_if_needed
@@ -19,13 +20,13 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=True)
     if tokenizer.pad_token is None and tokenizer.eos_token is not None:
         tokenizer.pad_token = tokenizer.eos_token
-    
+
     device_map = "auto" if torch.cuda.is_available() else None
-    
+
     require_accelerate_if_needed(device_map)
-    
+
     model_kwargs = {"device_map": device_map} if device_map is not None else {}
-    
+
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
         torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,

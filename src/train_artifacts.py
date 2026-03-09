@@ -1,20 +1,21 @@
 
-import subprocess
-import os
-import yaml
 import json
-import torch
-import sys
+import os
 import platform
-import transformers
-
-from typing import Optional, Mapping, Any, Sequence, Dict, Iterable
+import subprocess
+import sys
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timezone
+from typing import Any
 
-from src.errors import ConfigError, CheckpointError
+import torch
+import transformers
+import yaml
+
+from src.errors import CheckpointError, ConfigError
 
 
-def require_accelerate_if_needed(device_map: Optional[str]) -> None:
+def require_accelerate_if_needed(device_map: str | None) -> None:
     if device_map != "auto":
         return
     try:
@@ -26,12 +27,12 @@ def require_accelerate_if_needed(device_map: Optional[str]) -> None:
         ) from e
 
 
-def _git_sha() -> Optional[str]:
+def _git_sha() -> str | None:
     try:
         return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     except (OSError, subprocess.SubprocessError):
         return None
-    
+
 
 def guard_output_dir_empty(output_dir: str) -> None:
     if not os.path.exists(output_dir):
@@ -42,7 +43,7 @@ def guard_output_dir_empty(output_dir: str) -> None:
             f"Refusing to use non-empty output_dir: {output_dir}. "
             "Choose a fresh directory or delete its contents."
         )
-    
+
 
 def write_yaml(path: str, obj: Mapping[str, Any]) -> None:
     dirpath = os.path.dirname(path)
@@ -86,7 +87,7 @@ def write_jsonl(path: str, rows: Iterable[Mapping[str, Any]]) -> None:
             f.write(json.dumps(dict(r), ensure_ascii=False) + "\n")
 
 
-def build_train_meta(*, output_dir: str, cfg_dict: Mapping[str, Any], dataset_size_used: int, config_path: Optional[str] = None, override_paths: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+def build_train_meta(*, output_dir: str, cfg_dict: Mapping[str, Any], dataset_size_used: int, config_path: str | None = None, override_paths: Sequence[str] | None = None) -> dict[str, Any]:
     return {
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
         "output_dir": output_dir,

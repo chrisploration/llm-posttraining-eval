@@ -1,28 +1,38 @@
-from src.config import load_config, PostTrainConfig, load_config_from_dict
+import argparse
+import json
+import logging
+import os
+from collections.abc import Sequence
+from typing import Any
 
 import torch
-import os
-import argparse
-import logging
-import json
-
-from typing import Tuple, Sequence, Optional, Dict, Any
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, set_seed, TrainerCallback
+from datasets import Dataset, load_dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from datasets import load_dataset
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    TrainerCallback,
+    TrainingArguments,
+    set_seed,
+)
 from trl import SFTTrainer
-from datasets import Dataset
 
-from src.train_artifacts import guard_output_dir_empty, write_yaml, write_json, build_train_meta, append_jsonl, require_accelerate_if_needed
+from src.config import PostTrainConfig, load_config, load_config_from_dict
+from src.errors import CheckpointError, ConfigError, DataError
+from src.train_artifacts import (
+    append_jsonl,
+    build_train_meta,
+    guard_output_dir_empty,
+    require_accelerate_if_needed,
+    write_json,
+    write_yaml,
+)
 from src.utils.config_utils import deep_merge
 from src.utils.logging_setup import setup_logging
 
-from src.errors import ConfigError, DataError, CheckpointError
-
-
 logger = logging.getLogger(__name__)
 
-def build_model(cfg: PostTrainConfig) -> Tuple[torch.nn.Module, AutoTokenizer]:
+def build_model(cfg: PostTrainConfig) -> tuple[torch.nn.Module, AutoTokenizer]:
     tokenizer = AutoTokenizer.from_pretrained(cfg.base_id, use_fast=True)
 
     added_tokens = 0
@@ -149,9 +159,9 @@ def run_training(
     model: torch.nn.Module,
     tokenizer: AutoTokenizer,
     train_dataset: Dataset,
-    resume_from: Optional[str]
+    resume_from: str | None
 ) -> None:
-    
+
     os.makedirs(cfg.output_dir, exist_ok=True)
 
     log_path = os.path.join(cfg.output_dir, "train_log.jsonl")
@@ -199,14 +209,14 @@ def run_training(
     if not os.path.exists(adapter_config_path):
         raise CheckpointError(f"Missing adapter_config.json after save: {adapter_config_path}")
 
-    with open(adapter_config_path, "r", encoding="utf-8") as f:
+    with open(adapter_config_path, encoding="utf-8") as f:
         adapter_cfg = json.load(f)
 
     if not isinstance(adapter_cfg, dict):
         raise CheckpointError(f"adapter_config.json must contain a JSON object: {adapter_config_path}")
 
     required_keys = ["peft_type", "base_model_name_or_path"]
-    missing = [k for k in required_keys if k not in adapter_cfg] 
+    missing = [k for k in required_keys if k not in adapter_cfg]
     if missing:
         raise CheckpointError(f"adapter_config.json missing required keys {missing}: {adapter_config_path}")
 
@@ -214,12 +224,12 @@ def run_training(
 
 
 
-def run_training_entry(*, config_path: str, override_paths: Sequence[str], output_dir: Optional[str], seed: Optional[int], resume_from: Optional[str]) -> None:
-    
+def run_training_entry(*, config_path: str, override_paths: Sequence[str], output_dir: str | None, seed: int | None, resume_from: str | None) -> None:
+
 
     cfg, cfg_snapshot_raw = load_config(config_path, override_paths=override_paths)
 
-    cli_ov: Dict[str, Any] = {}
+    cli_ov: dict[str, Any] = {}
     if output_dir is not None:
         cli_ov.setdefault("output", {})["output_dir"] = output_dir
     if seed is not None:

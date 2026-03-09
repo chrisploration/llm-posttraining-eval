@@ -1,11 +1,11 @@
-from typing import List, Dict, Any, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Any
 
 import yaml
 
-
+from src.errors import ConfigError
 from src.utils.config_utils import deep_merge, load_yaml_mapping
 
-from src.errors import ConfigError
 
 class PostTrainConfig:
     def __init__(
@@ -30,7 +30,7 @@ class PostTrainConfig:
         lora_r: int,
         lora_alpha: int,
         lora_dropout: float,
-        lora_target_modules: List[str]
+        lora_target_modules: list[str]
     ) -> None:
         # Assume load_config() already casts types; validate only the expensive-failure cases.
         if not base_id:
@@ -74,7 +74,7 @@ class PostTrainConfig:
         self.lora_target_modules = list(lora_target_modules)
 
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "seed": self.seed,
             "base_id": self.base_id,
@@ -109,7 +109,7 @@ def _get(d: dict, path: str):
 
 
 
-def load_config_from_dict(raw: Dict[str, Any]) -> PostTrainConfig:
+def load_config_from_dict(raw: dict[str, Any]) -> PostTrainConfig:
     if not isinstance(raw, dict):
         raise ConfigError("Config must be a mapping/dict")
 
@@ -156,8 +156,8 @@ def load_config_from_dict(raw: Dict[str, Any]) -> PostTrainConfig:
 
 
 
-def load_config(path: str, *, override_paths: Optional[Sequence[str]] = None) -> Tuple[PostTrainConfig, Dict[str, Any]]:
-    with open(path, "r", encoding="utf-8") as f:
+def load_config(path: str, *, override_paths: Sequence[str] | None = None) -> tuple[PostTrainConfig, dict[str, Any]]:
+    with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
 
     if not isinstance(raw, dict):

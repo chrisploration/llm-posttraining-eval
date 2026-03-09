@@ -1,10 +1,12 @@
-from typing import Any, Dict, Mapping
+from collections.abc import Mapping
+from typing import Any
+
 import yaml
 
 from src.errors import ConfigError
 
 
-def deep_merge(base: Dict[str, Any], override: Mapping[str, Any]) -> Dict[str, Any]:
+def deep_merge(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(base, dict):
         raise TypeError(f"deep_merge base must be dict, got {type(base).__name__}")
 
@@ -21,8 +23,8 @@ def deep_merge(base: Dict[str, Any], override: Mapping[str, Any]) -> Dict[str, A
     return base
 
 
-def load_yaml_mapping(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
+def load_yaml_mapping(path: str) -> dict[str, Any]:
+    with open(path, encoding="utf-8") as f:
         obj = yaml.safe_load(f)
     if obj is None:
         return {}

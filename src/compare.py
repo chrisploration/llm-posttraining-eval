@@ -1,23 +1,22 @@
 import argparse
 import json
+import logging
 import os
 import sys
-import logging
-from typing import Dict, Any, Optional, List
+from typing import Any
 
 from src.errors import EvalError
 from src.utils.logging_setup import setup_logging
 
-
 logger = logging.getLogger(__name__)
 
 
-def _load_results(results_dir: str) -> Dict[str, Any]:
+def _load_results(results_dir: str) -> dict[str, Any]:
     results_path = os.path.join(results_dir, "results.json")
     if not os.path.exists(results_path):
         raise EvalError(f"results.json not found in {results_dir}")
 
-    with open(results_path, "r", encoding="utf-8") as f:
+    with open(results_path, encoding="utf-8") as f:
         data = json.load(f)
 
     if not isinstance(data, dict):
@@ -26,20 +25,20 @@ def _load_results(results_dir: str) -> Dict[str, Any]:
     return data
 
 
-def _load_meta(results_dir: str) -> Dict[str, Any]:
+def _load_meta(results_dir: str) -> dict[str, Any]:
     meta_path = os.path.join(results_dir, "meta.json")
     if not os.path.exists(meta_path):
         return {}
-    
-    with open(meta_path, "r", encoding="utf-8") as f:
+
+    with open(meta_path, encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, dict):
         raise EvalError(f"meta.json must contain a JSON object: {meta_path}")
-    
+
     return data
 
 
-def _extract_accuracy(metrics: Dict[str, Any], task: str) -> Optional[float]:
+def _extract_accuracy(metrics: dict[str, Any], task: str) -> float | None:
     task_metrics = metrics.get(task)
     if task_metrics is None:
         return None
@@ -60,7 +59,7 @@ def _extract_accuracy(metrics: Dict[str, Any], task: str) -> Optional[float]:
     return None
 
 
-def _extract_safety_detail(metrics: Dict[str, Any]) -> Dict[str, float]:
+def _extract_safety_detail(metrics: dict[str, Any]) -> dict[str, float]:
     safety = metrics.get("safety", {})
     rates = safety.get("rates", {})
     return {
@@ -71,7 +70,7 @@ def _extract_safety_detail(metrics: Dict[str, Any]) -> Dict[str, float]:
     }
 
 
-def compare(baseline_dir: str, candidate_dir: str) -> Dict[str, Any]:
+def compare(baseline_dir: str, candidate_dir: str) -> dict[str, Any]:
     base_results = _load_results(baseline_dir)
     cand_results = _load_results(candidate_dir)
 
@@ -83,8 +82,8 @@ def compare(baseline_dir: str, candidate_dir: str) -> Dict[str, Any]:
 
     all_tasks = sorted(set(list(base_metrics.keys()) + list(cand_metrics.keys())))
 
-    task_deltas: List[Dict[str, Any]] = []
-    regressions: List[str] = []
+    task_deltas: list[dict[str, Any]] = []
+    regressions: list[str] = []
 
     for task in all_tasks:
         base_acc = _extract_accuracy(base_metrics, task)
@@ -141,8 +140,8 @@ def compare(baseline_dir: str, candidate_dir: str) -> Dict[str, Any]:
     return report
 
 
-def format_markdown(report: Dict[str, Any]) -> str:
-    lines: List[str] = []
+def format_markdown(report: dict[str, Any]) -> str:
+    lines: list[str] = []
 
     lines.append("# Evaluation Comparison Report")
     lines.append("")
