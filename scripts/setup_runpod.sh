@@ -16,7 +16,7 @@ pip install -e .
 python3 -m scripts.generate_synthetic_dataset --num_examples 1000 --force
 echo "Generated training data: data/synthetic/train.jsonl (1000 examples)"
 
-echo "Setup complete. Run training with:"
+echo "=== Setup complete. Running pipeline... ==="
 
 # Step 1: Baseline evaluation
 echo ""
@@ -46,7 +46,7 @@ python3 -m src.eval.run_eval \
     --base_model mistralai/Mistral-7B-Instruct-v0.3
 
 
-# Step 4
+# Step 4: Compare results
 echo ""
 echo "=== Step 4/4: Compare baseline vs post-trained ==="
 python3 -m src.compare \
