@@ -12,6 +12,9 @@ cd llm-posttraining-eval
 git pull origin main
 pip install -e .
 
+# Verify environment
+python3 -m pytest tests/ -v
+
 # Generate training data
 python3 -m scripts.generate_synthetic_dataset --num_examples 1000 --force
 echo "Generated training data: data/synthetic/train.jsonl (1000 examples)"
