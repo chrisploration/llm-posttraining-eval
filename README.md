@@ -152,7 +152,20 @@ Available override tiers:
 
 - `posttrain_smoke.yaml` — minimal run for testing (10 examples, no quantization)
 - `posttrain_synth.yaml` — points training to generated synthetic data
-- `eval_extended.yaml` — high volume evaluation (2000 prompts) for variance reduction
+- `eval_smoke.yaml` — fast evaluation (50 prompts) for quick sanity checks
+- `eval_extended.yaml` — high volume evaluation (2000 prompts) for variance reduction (tighter confidence intervals)
+- `eval_stress_robustness.yaml` — extended robustness testing with additional perturbation patterns
+
+```bash
+# Fast sanity check
+python3 -m src.eval.run_eval --config configs/eval.yaml --override configs/overrides/eval_smoke.yaml
+
+# Extended eval for tighter confidence intervals
+python3 -m src.eval.run_eval --config configs/eval.yaml --override configs/overrides/eval_extended.yaml
+
+# Deep robustness analysis
+python3 -m src.eval.run_eval --config configs/eval.yaml --override configs/overrides/eval_stress_robustness.yaml
+```
 
 ## Dataset Format
 
