@@ -99,7 +99,9 @@ def build_model(cfg: PostTrainConfig) -> tuple[torch.nn.Module, AutoTokenizer]:
 def load_data(cfg: PostTrainConfig, tokenizer: AutoTokenizer) -> Dataset:
     """Load chat format JSONL training data and convert to plain text using the tokenizer's chat template."""
     if not os.path.exists(cfg.train_file):
-        raise DataError(f"Training file not found: {cfg.train_file}")
+        raise DataError(
+            f"Training file not found: {cfg.train_file}\n"
+            "Run: python -m scripts.generate_synthetic_dataset")
 
     ds = load_dataset("json", data_files={"train": cfg.train_file})["train"]
     if "messages" not in ds.column_names:
