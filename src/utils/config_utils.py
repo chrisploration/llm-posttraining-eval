@@ -7,6 +7,7 @@ from src.errors import ConfigError
 
 
 def deep_merge(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
+    """Recursively merge an override mapping into a base dict."""
     if not isinstance(base, dict):
         raise TypeError(f"deep_merge base must be dict, got {type(base).__name__}")
 
@@ -24,6 +25,7 @@ def deep_merge(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str, A
 
 
 def load_yaml_mapping(path: str) -> dict[str, Any]:
+    """Load a YAML file and ensure the top level object is a mapping."""
     with open(path, encoding="utf-8") as f:
         obj = yaml.safe_load(f)
     if obj is None:

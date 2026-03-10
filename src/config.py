@@ -8,6 +8,7 @@ from src.utils.config_utils import deep_merge, load_yaml_mapping
 
 
 class PostTrainConfig:
+    """Validated training configuration parsed from YAML config files."""
     def __init__(
         self,
         *,
@@ -110,6 +111,7 @@ def _get(d: dict, path: str):
 
 
 def load_config_from_dict(raw: dict[str, Any]) -> PostTrainConfig:
+    """Build a PostTrainConfig from an already merged raw config dictionary."""
     if not isinstance(raw, dict):
         raise ConfigError("Config must be a mapping/dict")
 
@@ -157,6 +159,7 @@ def load_config_from_dict(raw: dict[str, Any]) -> PostTrainConfig:
 
 
 def load_config(path: str, *, override_paths: Sequence[str] | None = None) -> tuple[PostTrainConfig, dict[str, Any]]:
+    """Load and merge YAML config files, returning a PostTrainConfig and the merged raw dict."""
     with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
 

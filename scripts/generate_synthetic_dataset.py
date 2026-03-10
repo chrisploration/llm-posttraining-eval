@@ -36,6 +36,7 @@ def _mk_example(user: str, assistant: Optional[str]) -> Dict[str, Any]:
 
 # each line: {"messages":[{"role":"user","content":...},{"role":"assistant","content":...}]}
 def generate_examples(n: int, rng: random.Random) -> List[Dict[str, Any]]:
+    """Generate n synthetic chat format training examples."""
     templates = [
         lambda: _mk_example("Say hello.", "Hello."),
         lambda: _mk_example("What is the capital of France?", "Paris."),
@@ -75,6 +76,7 @@ def generate_examples(n: int, rng: random.Random) -> List[Dict[str, Any]]:
 
 
 def main() -> None:
+    """CLI entry point for generating synthetic training data."""
     ap = argparse.ArgumentParser(description="Generate synthetic chat JSONL for post-training.")
     ap.add_argument("--num_examples",
                     type=int,

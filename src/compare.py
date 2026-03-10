@@ -71,6 +71,7 @@ def _extract_safety_detail(metrics: dict[str, Any]) -> dict[str, float]:
 
 
 def compare(baseline_dir: str, candidate_dir: str) -> dict[str, Any]:
+    """Compare baseline and candidate evaluation results, returning a structured report with deltas and regression flags."""
     base_results = _load_results(baseline_dir)
     cand_results = _load_results(candidate_dir)
 
@@ -141,6 +142,7 @@ def compare(baseline_dir: str, candidate_dir: str) -> dict[str, Any]:
 
 
 def format_markdown(report: dict[str, Any]) -> str:
+    """Render a comparison report as a human readable Markdown table."""
     lines: list[str] = []
 
     lines.append("# Evaluation Comparison Report")
@@ -194,6 +196,7 @@ def format_markdown(report: dict[str, Any]) -> str:
 
 
 def main() -> None:
+    """CLI entry point for comparing baseline and candidate evaluation results."""
     setup_logging()
 
     ap = argparse.ArgumentParser(description="Compare baseline and candidate evaluation results.")

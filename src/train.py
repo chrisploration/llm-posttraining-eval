@@ -33,6 +33,7 @@ from src.utils.logging_setup import setup_logging
 logger = logging.getLogger(__name__)
 
 def build_model(cfg: PostTrainConfig) -> tuple[torch.nn.Module, AutoTokenizer]:
+    """Load the base model with optional 4-bit quantization and apply LoRA adapters."""
     tokenizer = AutoTokenizer.from_pretrained(cfg.base_id, use_fast=True)
 
     added_tokens = 0
@@ -96,6 +97,7 @@ def build_model(cfg: PostTrainConfig) -> tuple[torch.nn.Module, AutoTokenizer]:
 
 
 def load_data(cfg: PostTrainConfig, tokenizer: AutoTokenizer) -> Dataset:
+    """Load chat format JSONL training data and convert to plain text using the tokenizer's chat template."""
     if not os.path.exists(cfg.train_file):
         raise DataError(f"Training file not found: {cfg.train_file}")
 
@@ -140,6 +142,7 @@ def load_data(cfg: PostTrainConfig, tokenizer: AutoTokenizer) -> Dataset:
 
 
 class JsonlLoggerCallback(TrainerCallback):
+    """Trainer callback that appends training metrics to a JSONL log file after each logging step."""
     def __init__(self, path: str):
         self.path = path
 
@@ -161,6 +164,7 @@ def run_training(
     train_dataset: Dataset,
     resume_from: str | None
 ) -> None:
+    """Run the SFTTrainer loop, save the adapter checkpoint, and validate artifacts."""
 
     os.makedirs(cfg.output_dir, exist_ok=True)
 
@@ -225,7 +229,7 @@ def run_training(
 
 
 def run_training_entry(*, config_path: str, override_paths: Sequence[str], output_dir: str | None, seed: int | None, resume_from: str | None) -> None:
-
+    """End to end training entry point: load config, build model, and run training."""
 
     cfg, cfg_snapshot_raw = load_config(config_path, override_paths=override_paths)
 
@@ -282,6 +286,7 @@ def run_training_entry(*, config_path: str, override_paths: Sequence[str], outpu
 
 
 def main() -> None:
+    """CLI entry point for posttraining."""
     setup_logging()
     ap = argparse.ArgumentParser(description="Run post-training from a YAML config.")
     ap.add_argument("--config",

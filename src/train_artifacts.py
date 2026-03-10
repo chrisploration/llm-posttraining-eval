@@ -16,6 +16,7 @@ from src.errors import CheckpointError, ConfigError
 
 
 def require_accelerate_if_needed(device_map: str | None) -> None:
+    """Raise ConfigError if device_map='auto' is requested but accelerate is not installed."""
     if device_map != "auto":
         return
     try:
@@ -35,6 +36,7 @@ def _git_sha() -> str | None:
 
 
 def guard_output_dir_empty(output_dir: str) -> None:
+    """Raise CheckpointError if the output directory already contains files."""
     if not os.path.exists(output_dir):
         return
     leftovers = os.listdir(output_dir)
@@ -46,6 +48,7 @@ def guard_output_dir_empty(output_dir: str) -> None:
 
 
 def write_yaml(path: str, obj: Mapping[str, Any]) -> None:
+    """Write a mapping to a YAML file, creating parent directories as needed."""
     dirpath = os.path.dirname(path)
     if dirpath:
         os.makedirs(dirpath, exist_ok=True)
@@ -59,6 +62,7 @@ def write_yaml(path: str, obj: Mapping[str, Any]) -> None:
 
 
 def write_json(path: str, obj: Mapping[str, Any]) -> None:
+    """Write a mapping to a formatted JSON file, creating parent directories if needed."""
     dirpath = os.path.dirname(path)
     if dirpath:
         os.makedirs(dirpath, exist_ok=True)
@@ -69,6 +73,7 @@ def write_json(path: str, obj: Mapping[str, Any]) -> None:
 
 
 def append_jsonl(path: str, row: Mapping[str, Any]) -> None:
+    """Append a single JSON object as a line to a JSONL file."""
     dirpath = os.path.dirname(path)
     if dirpath:
         os.makedirs(dirpath, exist_ok=True)
@@ -78,6 +83,7 @@ def append_jsonl(path: str, row: Mapping[str, Any]) -> None:
 
 
 def write_jsonl(path: str, rows: Iterable[Mapping[str, Any]]) -> None:
+    """Write an iterable of mappings to a JSONL file, one JSON object per line."""
     dirpath = os.path.dirname(path)
     if dirpath:
         os.makedirs(dirpath, exist_ok=True)
@@ -88,6 +94,7 @@ def write_jsonl(path: str, rows: Iterable[Mapping[str, Any]]) -> None:
 
 
 def build_train_meta(*, output_dir: str, cfg_dict: Mapping[str, Any], dataset_size_used: int, config_path: str | None = None, override_paths: Sequence[str] | None = None) -> dict[str, Any]:
+    """Build metadata describing the training configuration and environment."""
     return {
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
         "output_dir": output_dir,
