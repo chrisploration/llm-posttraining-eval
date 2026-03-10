@@ -16,14 +16,13 @@ def _ensure_parent_dir(path: str) -> None:
 
 def _write_jsonl(path: str, rows: List[Dict[str, Any]], *, force: bool) -> None:
     if os.path.exists(path) and not force:
-        raise FileExistsError(
-            f"Refusing to overwrite existing file: {path}. "
-            "Pass --force to overwrite."
-        )
+        print(f"File already exists, skipping: {path}.")
+        return False
     _ensure_parent_dir(path)
     with open(path, "w", encoding="utf-8") as f:
         for r in rows:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    return True
 
 
 def _mk_example(user: str, assistant: Optional[str]) -> Dict[str, Any]:
@@ -101,8 +100,8 @@ def main() -> None:
 
     rng = random.Random(int(args.seed))
     rows = generate_examples(int(args.num_examples), rng)
-    _write_jsonl(args.out, rows, force=bool(args.force))
-    print(f"Wrote {len(rows)} examples to {args.out}")
+    if _write_jsonl(args.out, rows, force=bool(args.force)):
+        print(f"Wrote {len(rows)} examples to {args.out}")
 
 
 if __name__ == "__main__":
