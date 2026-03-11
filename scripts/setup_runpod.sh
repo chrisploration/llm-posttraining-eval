@@ -10,6 +10,7 @@ fi
 
 cd llm-posttraining-eval
 git pull origin main
+pip install --upgrade setuptools pip
 pip install -e .
 
 # Verify environment
