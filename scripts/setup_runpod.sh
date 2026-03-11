@@ -15,7 +15,10 @@ pip install pytest
 pip install -e .
 
 # Verify environment
-python3 -m pytest tests/ -v
+# Run GPU-heavy training smoke test first in its own process (needs full VRAM).
+python3 -m pytest tests/test_train_smoke_artifacts.py -v
+# Run remaining tests in a separate process to avoid CUDA OOM conflicts.
+python3 -m pytest tests/ --ignore=tests/test_train_smoke_artifacts.py -v
 
 # Generate training data
 python3 -m scripts.generate_synthetic_dataset --num_examples 1000 --force
