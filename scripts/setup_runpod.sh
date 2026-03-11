@@ -11,6 +11,7 @@ fi
 cd llm-posttraining-eval
 git pull origin main
 pip install --upgrade setuptools pip
+pip install pytest
 pip install -e .
 
 # Verify environment
