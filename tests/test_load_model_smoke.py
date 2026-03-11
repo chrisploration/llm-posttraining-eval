@@ -1,3 +1,4 @@
+import gc
 import random
 
 import torch
@@ -51,5 +52,12 @@ def test_load_model_and_generate() -> None:
     with torch.no_grad():
         outputs = model.generate(**inputs, **gen_params)
 
-    text = tokenizer.decode(outputs[0], skip_special_tokens = True)
+    text = tokenizer.decode(outputs[0], skip_special_tokens=True)
     assert len(text) > len(prompt), "Model should generate text beyond the prompt"
+
+    # Explicitly release GPU memory so subsequent tests that spawn subprocesses
+    # (e.g. test_train_smoke_artifacts) have enough VRAM available.
+    del outputs, inputs, model, tokenizer
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
