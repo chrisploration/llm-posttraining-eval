@@ -11,9 +11,10 @@ from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
+    BitsAndBytesConfig,
     TrainerCallback,
     TrainingArguments,
-    set_seed,
+    set_seed
 )
 from trl import SFTTrainer
 
@@ -25,7 +26,7 @@ from src.train_artifacts import (
     guard_output_dir_empty,
     require_accelerate_if_needed,
     write_json,
-    write_yaml,
+    write_yaml
 )
 from src.utils.config_utils import deep_merge
 from src.utils.logging_setup import setup_logging
@@ -57,10 +58,10 @@ def build_model(cfg: PostTrainConfig) -> tuple[torch.nn.Module, AutoTokenizer]:
                 "load_in_4bit=true requires bitsandbytes. Install with: pip install bitsandbytes"
             ) from e
 
-        model_kwargs.update({"load_in_4bit": True, "torch_dtype": torch.float16})
+        model_kwargs.update({"quantization_config": BitsAndBytesConfig(load_in_4bit=True), "dtype": torch.float16})
     else:
         model_kwargs.update(
-            {"torch_dtype": torch.float16 if torch.cuda.is_available() else torch.float32}
+            {"dtype": torch.float16 if torch.cuda.is_available() else torch.float32}
         )
 
     model = AutoModelForCausalLM.from_pretrained(cfg.base_id, **model_kwargs)
