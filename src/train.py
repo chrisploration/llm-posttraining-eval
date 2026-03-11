@@ -184,7 +184,6 @@ def run_training(
         logging_steps=50,
         save_strategy="epoch",
         save_total_limit=2,
-        remove_unused_columns=False,
         fp16=torch.cuda.is_available(),
         report_to=[]
     )
@@ -268,9 +267,9 @@ def run_training_entry(*, config_path: str, override_paths: Sequence[str], outpu
 
         logger.info("GPU memory available after model load: %.1fGB free / %.1fGB total", free_mem_gb, total_mem_gb)
 
-        if free_mem_gb < 2.0:
+        if free_mem_gb < 1.0:
             raise ConfigError(
-                f"Only {free_mem_gb:.1f}GB free GPU memory after model load. Need at least 2.0GB."
+                f"Only {free_mem_gb:.1f}GB free GPU memory after model load. Need at least 1.0GB."
             )
 
     train_dataset = load_data(cfg, tokenizer)
