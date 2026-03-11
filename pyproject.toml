@@ -17,7 +17,8 @@ dependencies = [
     "bitsandbytes>=0.43,<0.50",
     "pyyaml>=6.0",
     "tqdm>=4.66",
-    "protobuf"
+    "protobuf",
+    "rich"
 ]
 
 [tool.setuptools.packages.find]
