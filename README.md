@@ -206,7 +206,14 @@ python3 -m pytest tests/ -v
 
 # Run a specific test file
 python3 -m pytest tests/test_scoring.py -v
+
+# Unit tests only (no GPU or model download required)
+python3 -m pytest tests/ -v --ignore=tests/test_load_model_smoke.py --ignore=tests/test_train_smoke_artifacts.py
 ```
+
+Two tests require a GPU and the Mistral-7B model to be downloaded locally:
+`test_load_model_smoke.py` and `test_train_smoke_artifacts.py`. All other tests
+run without GPU.
 
 ## Requirements
 
