@@ -1,0 +1,19 @@
+model:
+  id: mistralai/Mistral-7B-Instruct-v0.3
+generation:
+  max_new_tokens: 256
+  temperature: 0.0
+  do_sample: false
+  num_beams: 1
+eval:
+  num_prompts: 400
+  batch_size: 8
+  mix:
+    capability: 0.6
+    robustness: 0.25
+    safety: 0.15
+  tasks:
+  - basic_capability
+  - robustness
+  - safety
+seed: 42

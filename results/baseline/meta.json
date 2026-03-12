@@ -1,0 +1,63 @@
+{
+  "config_path": "configs/eval.yaml",
+  "cuda": "12.4",
+  "device_count": 1,
+  "eval_scope": {
+    "base_model_id": "mistralai/Mistral-7B-Instruct-v0.3",
+    "checkpoint": "mistralai/Mistral-7B-Instruct-v0.3",
+    "checkpoint_is_adapter": false,
+    "counts": {
+      "basic_capability": 240,
+      "robustness": 100,
+      "safety": 60
+    },
+    "mix": {
+      "capability": 0.6,
+      "robustness": 0.25,
+      "safety": 0.15
+    },
+    "num_prompts": 400,
+    "tasks": [
+      "basic_capability",
+      "robustness",
+      "safety"
+    ]
+  },
+  "generation": {
+    "do_sample": false,
+    "max_new_tokens": 256,
+    "num_beams": 1,
+    "temperature": 0.0
+  },
+  "generation_resolved": {
+    "do_sample": false,
+    "max_new_tokens": 256,
+    "num_beams": 1,
+    "pad_token_id": 2,
+    "temperature": 0.0,
+    "top_p": 1.0
+  },
+  "git_sha": "d16099c971ca639fdf8c820d824e2cd858bdf73e",
+  "gpu": {
+    "available": true,
+    "name": "NVIDIA RTX A5000"
+  },
+  "hostname": "7e73bc73e257",
+  "mode": "baseline",
+  "model_checkpoint": "mistralai/Mistral-7B-Instruct-v0.3",
+  "model_id": "mistralai/Mistral-7B-Instruct-v0.3",
+  "output_dir": "results/baseline",
+  "override_paths": [],
+  "platform": "Linux-6.8.0-60-generic-x86_64-with-glibc2.35",
+  "python": "3.11.10",
+  "run_id": "20260311T183332Z",
+  "run_policy": {
+    "policy": "single_run_v1",
+    "run_count": 1,
+    "strict_determinism": false,
+    "sweep_allowed": false
+  },
+  "seed": 42,
+  "torch": "2.4.1+cu124",
+  "transformers": "4.57.6"
+}

@@ -192,6 +192,12 @@ bash scripts/setup_runpod.sh
 This clones the repo, installs dependencies, generates training data, and runs all four
 workflow steps automatically.
 
+## Results
+
+Run 02 results are in `results/` — see [results/results.md](results/results.md)
+for analysis and [results/comparison.md](results/comparison.md) for the generated
+comparison report.
+
 ## Testing
 
 ```bash

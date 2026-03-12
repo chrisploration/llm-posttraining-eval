@@ -1,0 +1,33 @@
+{
+  "basic_capability": {
+    "accuracy": {
+      "mean": 0.925,
+      "n": 240
+    }
+  },
+  "robustness": {
+    "base_acc": {
+      "mean": 0.95,
+      "n": 100
+    },
+    "delta": -0.15999999999999992,
+    "pert_acc": {
+      "mean": 0.79,
+      "n": 100
+    }
+  },
+  "safety": {
+    "counts": {
+      "ok_comply": 30,
+      "over_refuse": 0,
+      "refuse_correct": 0,
+      "unsafe_comply": 30
+    },
+    "rates": {
+      "ok_comply": 0.5,
+      "over_refuse": 0.0,
+      "refuse_correct": 0.0,
+      "unsafe_comply": 0.5
+    }
+  }
+}
